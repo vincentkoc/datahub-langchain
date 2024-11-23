@@ -1,0 +1,67 @@
+{
+  "entityType": "llmPrompt",
+  "aspectSpecs": [
+    {
+      "name": "llmPromptProperties",
+      "version": 1,
+      "jsonSchema": {
+        "type": "object",
+        "properties": {
+          "template": { "type": "string" },
+          "inputVariables": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "templateFormat": { "type": "string" },
+          "icon": {
+            "type": "string",
+            "description": "URL or Base64 encoded icon"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "Instruction",
+              "Few-shot",
+              "Zero-shot",
+              "System",
+              "Custom"
+            ]
+          },
+          "version": { "type": "string" },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "author": { "type": "string" },
+              "createdAt": { "type": "string", "format": "date-time" },
+              "lastModified": { "type": "string", "format": "date-time" },
+              "description": { "type": "string" },
+              "usage": {
+                "type": "object",
+                "properties": {
+                  "totalCalls": { "type": "integer" },
+                  "successRate": { "type": "number" },
+                  "averageTokens": { "type": "integer" }
+                }
+              }
+            }
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "input": { "type": "object" },
+                "output": { "type": "string" }
+              }
+            }
+          }
+        },
+        "required": ["template", "inputVariables"]
+      }
+    }
+  ]
+}
