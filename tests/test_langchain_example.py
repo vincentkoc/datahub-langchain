@@ -1,25 +1,28 @@
 import pytest
 from unittest.mock import Mock
+from langchain_openai import OpenAI
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
 from src.langchain_example import LangChainMetadataEmitter
 from src.metadata_setup import DryRunEmitter
 
 @pytest.fixture
 def mock_llm():
-    llm = Mock()
+    llm = Mock(spec=OpenAI)
     llm.model_name = "test-model"
     llm.model_kwargs = {"temperature": 0.7}
     return llm
 
 @pytest.fixture
 def mock_prompt():
-    prompt = Mock()
+    prompt = Mock(spec=PromptTemplate)
     prompt.template = "Test template"
     prompt.input_variables = ["test_var"]
     return prompt
 
 @pytest.fixture
 def mock_chain():
-    chain = Mock()
+    chain = Mock(spec=LLMChain)
     chain.__class__.__name__ = "LLMChain"
     chain.verbose = True
     chain.max_retries = 2
