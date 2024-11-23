@@ -130,4 +130,4 @@ ingestion.ingest_recent_runs()
 
 ## License
 
-MIT
+GPL-3.0
