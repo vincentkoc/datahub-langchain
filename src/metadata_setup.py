@@ -3,8 +3,13 @@ import os
 from pathlib import Path
 from typing import Union
 
+from datahub.emitter.mce_builder import make_dataset_urn
 from datahub.emitter.rest_emitter import DatahubRestEmitter
-from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
+from datahub.metadata.schema_classes import (
+    MetadataChangeEventClass,
+    DatasetSnapshotClass,
+    DatasetPropertiesClass,
+)
 
 
 class DryRunEmitter:
@@ -13,27 +18,64 @@ class DryRunEmitter:
     def __init__(self):
         self.emitted_mces = []
 
-    def emit(self, mce: dict) -> None:
+    def emit(self, mce: Union[dict, MetadataChangeEventClass]) -> None:
         """Print the metadata change event instead of emitting it"""
-        self.emitted_mces.append(mce)
-        print("\n=== Metadata Change Event ===")
-        print(f"URN: {mce['proposedSnapshot']['urn']}")
+        try:
+            if isinstance(mce, dict):
+                mce_dict = mce
+            else:
+                mce_dict = mce.to_obj()
 
-        for aspect in mce["proposedSnapshot"]["aspects"]:
-            aspect_name = list(aspect.keys())[0]
-            print(f"\nAspect: {aspect_name}")
-            print(json.dumps(aspect[aspect_name], indent=2))
+            self.emitted_mces.append(mce_dict)
+            print("\n=== Metadata Change Event ===")
 
-        print("\n===========================\n")
+            # Handle both dictionary formats
+            if "proposedSnapshot" in mce_dict:
+                urn = mce_dict["proposedSnapshot"].get("urn")
+                aspects = mce_dict["proposedSnapshot"].get("aspects", [])
+                print(f"URN: {urn}")
 
-    def get_emitted_mces(self):
-        """Return all emitted MCEs"""
-        return self.emitted_mces
+                for aspect in aspects:
+                    if isinstance(aspect, dict):
+                        for aspect_name, aspect_value in aspect.items():
+                            print(f"\nAspect: {aspect_name}")
+                            print(json.dumps(aspect_value, indent=2))
+
+            print("\n===========================\n")
+        except Exception as e:
+            print(f"Error in dry run emission: {str(e)}")
+            print("Metadata content:")
+            print(json.dumps(mce_dict, indent=2))
+
+
+class DataHubEmitter(DatahubRestEmitter):
+    """Extended DataHub emitter with better error handling"""
+
+    def emit(self, mce: Union[dict, MetadataChangeEventClass]) -> None:
+        """Emit metadata with proper error handling"""
+        try:
+            # Test connection first
+            self.test_connection()
+
+            # Convert dict to MCE if needed
+            if isinstance(mce, dict):
+                snapshot = DatasetSnapshotClass(
+                    urn=mce["proposedSnapshot"]["urn"],
+                    aspects=mce["proposedSnapshot"]["aspects"]
+                )
+                mce = MetadataChangeEventClass(
+                    proposedSnapshot=snapshot
+                )
+
+            # Emit the MCE
+            super().emit(mce)
+        except Exception as e:
+            raise Exception(f"Failed to emit metadata to DataHub: {str(e)}")
 
 
 def get_datahub_emitter(
     gms_server: str = None,
-) -> Union[DatahubRestEmitter, DryRunEmitter]:
+) -> Union[DataHubEmitter, DryRunEmitter]:
     """Get the appropriate emitter based on configuration"""
     is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
 
@@ -46,7 +88,13 @@ def get_datahub_emitter(
     gms_server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
     token = os.getenv("DATAHUB_TOKEN")
 
-    return DatahubRestEmitter(gms_server=gms_server, token=token)
+    try:
+        emitter = DataHubEmitter(gms_server=gms_server, token=token)
+        emitter.test_connection()
+        return emitter
+    except Exception as e:
+        print(f"Warning: Could not connect to DataHub ({str(e)}). Falling back to dry run mode.")
+        return DryRunEmitter()
 
 
 class MetadataSetup:
@@ -56,28 +104,54 @@ class MetadataSetup:
 
     def register_all_types(self):
         """Register all custom types defined in metadata/types directory"""
+        success = True
         for type_file in self.types_dir.glob("*.json"):
-            self.register_type_from_file(type_file)
+            if not self.register_type_from_file(type_file):
+                success = False
+        return success
 
-    def register_type_from_file(self, file_path):
+    def register_type_from_file(self, file_path) -> bool:
         """Register a single type from a JSON file"""
-        with open(file_path) as f:
-            type_def = json.load(f)
-
-        mce = MetadataChangeEvent(
-            proposedSnapshot={
-                "entityType": type_def["entityType"],
-                "aspectSpecs": type_def["aspectSpecs"],
-            }
-        )
-
         try:
+            with open(file_path) as f:
+                type_def = json.load(f)
+
+            # Create URN for the type using dataset URN format
+            type_urn = make_dataset_urn(
+                platform="datahub",
+                name=f"entityType_{type_def['entityType']}",
+                env="PROD"
+            )
+
+            # Create properties aspect
+            properties = DatasetPropertiesClass(
+                name=type_def["entityType"],
+                description=f"Custom type for {type_def['entityType']}",
+                customProperties={
+                    "aspectSpecs": json.dumps(type_def["aspectSpecs"])
+                }
+            )
+
+            # Create snapshot with properties
+            snapshot = DatasetSnapshotClass(
+                urn=type_urn,
+                aspects=[properties]
+            )
+
+            # Create and emit MCE
+            mce = MetadataChangeEventClass(
+                proposedSnapshot=snapshot
+            )
+
             self.emitter.emit(mce)
             print(f"Successfully registered type from {file_path.name}")
+            return True
         except Exception as e:
             print(f"Error registering type from {file_path.name}: {str(e)}")
+            return False
 
 
 if __name__ == "__main__":
     setup = MetadataSetup()
-    setup.register_all_types()
+    if not setup.register_all_types():
+        print("\nWarning: Some types failed to register. Check the logs above for details.")
