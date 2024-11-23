@@ -55,7 +55,10 @@ services:
     environment:
     - DATAHUB_GMS_HOST=datahub-gms
     - DATAHUB_GMS_PORT=8080
-    - DATAHUB_SECRET=YouKnowNothing
+    - DATAHUB_SECRET=${DATAHUB_SECRET}
+    - AUTH_TOKEN_DURATION=30
+    - METADATA_SERVICE_AUTH_ENABLED=true
+    - AUTHENTICATION_TYPE=TOKEN
     - DATAHUB_APP_VERSION=1.0
     - DATAHUB_PLAY_MEM_BUFFER_SIZE=10MB
     - JAVA_OPTS=-Xms512m -Xmx512m -Dhttp.port=9002 -Dconfig.file=datahub-frontend/conf/application.conf -Djava.security.auth.login.config=datahub-frontend/conf/jaas.conf -Dlogback.configurationFile=datahub-frontend/conf/logback.xml -Dlogback.debug=false -Dpidfile.path=/dev/null
@@ -97,10 +100,11 @@ services:
     - KAFKA_SCHEMAREGISTRY_URL=http://schema-registry:8081
     - MAE_CONSUMER_ENABLED=true
     - MCE_CONSUMER_ENABLED=true
-    - METADATA_SERVICE_AUTH_ENABLED=${METADATA_SERVICE_AUTH_ENABLED:-false}
+    - METADATA_SERVICE_AUTH_ENABLED=true
     - PE_CONSUMER_ENABLED=true
     - UI_INGESTION_ENABLED=true
-    - TOKEN=${DATAHUB_TOKEN}
+    - TOKENS_ENABLED=true
+    - DATAHUB_GMS_TOKEN=${DATAHUB_TOKEN:-}
     healthcheck:
       interval: 1s
       retries: 3
