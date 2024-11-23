@@ -69,6 +69,27 @@ datahub docker quickstart
 python src/langchain_example.py
 ```
 
+## Setup DataHub
+
+1. Start DataHub locally:
+```bash
+make docker-up
+```
+
+2. Once DataHub is running:
+   - Go to http://localhost:9002
+   - Login with default credentials:
+     - Username: datahub
+     - Password: datahub
+   - Navigate to Settings -> Access Tokens
+   - Create a new token
+   - Copy the token value
+
+3. Add the token to your `.env` file:
+```bash
+DATAHUB_TOKEN=your_token_here
+```
+
 ## Project Structure
 
 ```
