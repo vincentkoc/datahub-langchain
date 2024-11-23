@@ -1,12 +1,13 @@
 import json
 import os
 from datetime import datetime, timedelta
+from unittest.mock import Mock
 from uuid import UUID
 
 from dotenv import load_dotenv
 from langsmith import Client
 
-from src.metadata_setup import get_datahub_emitter
+from src.metadata_setup import get_datahub_emitter, make_dataset_urn
 
 load_dotenv()
 
@@ -50,7 +51,12 @@ class LangSmithIngestion:
 
     def emit_run_metadata(self, run):
         """Emit metadata for a single LangSmith run"""
-        run_urn = f"urn:li:llmRun:{run.id}"
+        # Use dataset URN format for now
+        run_urn = make_dataset_urn(
+            platform="llm",
+            name=f"run_{run.id}",
+            env="PROD"
+        )
 
         try:
             # Clean up error message if present
@@ -95,7 +101,15 @@ class LangSmithIngestion:
             mce_dict = {
                 "proposedSnapshot": {
                     "urn": run_urn,
-                    "aspects": [{"llmRunProperties": run_data}],
+                    "aspects": [
+                        {
+                            "DatasetProperties": {
+                                "name": str(run.id),
+                                "description": "LangSmith Run",
+                                "customProperties": run_data
+                            }
+                        }
+                    ],
                 }
             }
 
