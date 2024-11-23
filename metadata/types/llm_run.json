@@ -1,0 +1,71 @@
+{
+  "entityType": "llmRun",
+  "aspectSpecs": [
+    {
+      "name": "llmRunProperties",
+      "version": 1,
+      "jsonSchema": {
+        "type": "object",
+        "properties": {
+          "runId": { "type": "string" },
+          "name": { "type": "string" },
+          "startTime": { "type": "string", "format": "date-time" },
+          "endTime": { "type": "string", "format": "date-time" },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "failed", "running", "error"]
+          },
+          "error": { "type": "string" },
+          "inputs": { "type": "object" },
+          "outputs": { "type": "object" },
+          "runtime": { "type": "number" },
+          "parentRunId": { "type": "string" },
+          "childRunIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "feedback": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": { "type": "string" },
+                "value": { "type": "number" },
+                "comment": { "type": "string" },
+                "timestamp": { "type": "string", "format": "date-time" }
+              }
+            }
+          },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "tokenUsage": {
+                "type": "object",
+                "properties": {
+                  "promptTokens": { "type": "integer" },
+                  "completionTokens": { "type": "integer" },
+                  "totalTokens": { "type": "integer" }
+                }
+              },
+              "latency": { "type": "number" },
+              "cost": { "type": "number" }
+            }
+          },
+          "trace": {
+            "type": "object",
+            "properties": {
+              "projectName": { "type": "string" },
+              "sessionName": { "type": "string" },
+              "executionOrder": { "type": "integer" }
+            }
+          }
+        },
+        "required": ["runId", "startTime", "status"]
+      }
+    }
+  ]
+}
