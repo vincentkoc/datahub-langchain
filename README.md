@@ -1,153 +1,168 @@
 # LangChain DataHub Integration
 
-This project demonstrates how to integrate LangChain/LangSmith workflows into DataHub's metadata platform without modifying the core DataHub code.
+This project demonstrates how to integrate LangChain/LangSmith workflows into DataHub's metadata platform, providing visibility into your LLM operations.
+
+## Features
+
+- Custom metadata types for LLM components:
+  - Models (GPT-4, Claude, etc.)
+  - Prompts (templates, few-shot examples)
+  - Chains (LangChain sequences)
+  - Runs (execution history from LangSmith)
+- Dry run mode for testing without DataHub
+- Automatic metadata ingestion from LangSmith
+- Support for both local and remote DataHub instances
 
 ## Prerequisites
 
 - Python 3.8+
 - LangSmith API access
-- (Optional) DataHub running locally or accessible endpoint
+- DataHub instance (local or remote)
+- OpenAI API key (for examples)
 
 ## Quick Start
 
-1. **Set up your environment**
+1. **Set up environment**
 
 ```bash
-# Clone the repository
+# Clone and setup
 git clone <repository-url>
 cd langchain-datahub-integration
-
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: .\venv\Scripts\activate
-
-# Install dependencies
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+
+# Copy and edit environment variables
+cp .env.example .env
 ```
 
-2. **Configure environment variables**
+2. **Configure environment**
 
+Required variables in `.env`:
 ```bash
-# Copy example environment file
-cp .env.example .env
-
-# Edit .env with your credentials
-# Required for LangSmith integration:
+# LangSmith configuration
 LANGSMITH_API_KEY=ls-...
 LANGCHAIN_TRACING_V2=true
 LANGCHAIN_PROJECT="default"
 
-# Optional for DataHub integration:
+# OpenAI (for examples)
+OPENAI_API_KEY=sk-...
+
+# DataHub configuration
 DATAHUB_GMS_URL=http://localhost:8080
-DATAHUB_TOKEN=your_datahub_personal_access_token
-```
-
-3. **Try the dry run first**
-
-```bash
-# Run LangSmith ingestion in dry-run mode
-python src/dry_run_example.py
-
-# This will show the metadata that would be sent to DataHub
-```
-
-4. **Run with LangSmith integration**
-
-```bash
-# Ingest LangSmith runs
-python src/langsmith_ingestion.py
-```
-
-5. **(Optional) Start DataHub and run full integration**
-
-```bash
-# Start DataHub using Docker
-datahub docker quickstart
-
-# Wait for DataHub to be ready (usually takes a few minutes)
-# Then run the full integration
-python src/langchain_example.py
-```
-
-## Setup DataHub
-
-1. Start DataHub locally:
-```bash
-make docker-up
-```
-
-2. Once DataHub is running:
-   - Go to http://localhost:9002
-   - Login with default credentials:
-     - Username: datahub
-     - Password: datahub
-   - Navigate to Settings -> Access Tokens
-   - Create a new token
-   - Copy the token value
-
-3. Add the token to your `.env` file:
-```bash
 DATAHUB_TOKEN=your_token_here
+DATAHUB_DRY_RUN=false  # Set to true for testing
 ```
 
-## Project Structure
+3. **Start DataHub (if running locally)**
 
-```
-project/
-├── src/
-│   ├── dry_run_emitter.py     # Emitter for testing without DataHub
-│   ├── langsmith_ingestion.py # LangSmith integration
-│   ├── langchain_example.py   # Full LangChain example
-│   └── metadata_setup.py      # DataHub metadata setup
-├── metadata/
-│   └── types/                 # Custom type definitions
-│       ├── llm_model.json
-│       ├── llm_chain.json
-│       └── llm_prompt.json
-└── requirements.txt
+```bash
+# Start DataHub using provided compose file
+make docker-up
+
+# Wait for DataHub to be ready (~2-3 minutes)
+# Then create a token and add it to .env
+make setup-token
 ```
 
-## Using the Dry Run Mode
+4. **Run the integration**
 
-The dry run mode allows you to see what metadata would be sent to DataHub without actually sending it:
+```bash
+# Test with dry run first
+make dry-run
 
-```python
-from src.dry_run_emitter import DryRunEmitter
-from src.langchain_example import LangChainMetadataEmitter
-
-# Initialize with dry run emitter
-emitter = LangChainMetadataEmitter(emitter=DryRunEmitter())
-
-# Run your example
-emitter.run_example()
+# Run the full integration
+make run
 ```
 
-## LangSmith Integration
+## Architecture
 
-The LangSmith integration allows you to:
-1. Fetch runs from your LangSmith projects
-2. Transform them into DataHub metadata
-3. Either preview (dry run) or ingest into DataHub
+The integration consists of three main components:
 
-Example usage:
-```python
-from src.langsmith_ingestion import LangSmithIngestion
-from src.dry_run_emitter import DryRunEmitter
+1. **Metadata Setup** (`src/metadata_setup.py`)
+   - Registers custom types with DataHub
+   - Handles connection and authentication
+   - Provides dry run capability
 
-# For dry run
-ingestion = LangSmithIngestion(emitter=DryRunEmitter())
-ingestion.ingest_recent_runs(limit=5)
+2. **LangSmith Integration** (`src/langsmith_ingestion.py`)
+   - Fetches run history from LangSmith
+   - Transforms runs into DataHub metadata
+   - Handles batching and rate limiting
 
-# For actual ingestion
-ingestion = LangSmithIngestion()
-ingestion.ingest_recent_runs()
+3. **LangChain Example** (`src/langchain_example.py`)
+   - Shows live integration with LangChain
+   - Demonstrates metadata emission
+   - Includes error handling
+
+## Custom Types
+
+The integration defines several custom metadata types:
+
+1. **LLM Model** (`metadata/types/llm_model.json`)
+   - Model details (name, provider)
+   - Capabilities and limitations
+   - Performance metrics
+
+2. **LLM Prompt** (`metadata/types/llm_prompt.json`)
+   - Template structure
+   - Input variables
+   - Usage statistics
+
+3. **LLM Chain** (`metadata/types/llm_chain.json`)
+   - Component relationships
+   - Configuration
+   - Performance metrics
+
+4. **LLM Run** (`metadata/types/llm_run.json`)
+   - Execution details
+   - Inputs/outputs
+   - Error information
+
+## Development
+
+```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
+# Run tests
+make test
+
+# Format code
+make format
+
+# Run linters
+make lint
 ```
+
+## Troubleshooting
+
+1. **DataHub Connection Issues**
+   ```bash
+   # Test DataHub connection
+   make check-connection
+   ```
+
+2. **Dry Run Mode**
+   ```bash
+   # Set in .env
+   DATAHUB_DRY_RUN=true
+
+   # Or use make target
+   make dry-run
+   ```
+
+3. **Common Issues**
+   - Ensure DataHub is running (`docker ps`)
+   - Check token is set in `.env`
+   - Verify GMS URL is correct
+   - Look for rate limiting in logs
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Submit a pull request
+3. Run tests (`make test`)
+4. Submit a pull request
 
 ## License
 
