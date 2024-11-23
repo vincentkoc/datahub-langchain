@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -12,6 +13,9 @@ from datahub.metadata.schema_classes import DatasetSnapshotClass
 from src.metadata_setup import get_datahub_emitter, DryRunEmitter
 
 load_dotenv()
+
+# Add delay between metadata pushes (in seconds)
+METADATA_PUSH_DELAY = 1.0
 
 
 class JSONEncoder(json.JSONEncoder):
@@ -191,6 +195,8 @@ class LangSmithIngestion:
                             print(f"DRY RUN: Successfully processed run: {run.id}")
                         else:
                             print(f"Ingested run: {run.id}")
+                            # Add delay between metadata pushes
+                            time.sleep(METADATA_PUSH_DELAY)
                 except Exception as e:
                     print(f"Error processing run {run.id}: {str(e)}")
                     if not self.is_dry_run:
