@@ -159,6 +159,16 @@ class LangChainMetadataEmitter:
         }
         return self.emit_metadata(mce_dict)
 
+    def get_provider_icon(self, provider: str) -> str:
+        """Get provider icon"""
+        # Add icon lookup logic here
+        return ""
+
+    def get_chain_icon(self, chain_type: str) -> str:
+        """Get chain icon"""
+        # Add icon lookup logic here
+        return ""
+
 
 def run_example():
     is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
