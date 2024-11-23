@@ -1,9 +1,9 @@
 import pytest
 import os
 from unittest.mock import patch
-from langchain_openai import OpenAI
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema.runnable import RunnableSequence
 from src.metadata_setup import MetadataSetup
 from src.langchain_example import LangChainMetadataEmitter
 from src.langsmith_ingestion import LangSmithIngestion
@@ -19,15 +19,15 @@ def test_full_integration_flow():
     setup.register_all_types()
 
     # 2. Run LangChain example with actual components
-    with patch('langchain_openai.OpenAI') as mock_openai:
-        mock_openai.return_value.run.return_value = "Paris"
+    with patch('langchain_openai.ChatOpenAI') as mock_chat:
+        mock_chat.return_value.invoke.return_value.content = "Paris"
 
-        llm = OpenAI(model_name="gpt-4o-mini")
-        prompt = PromptTemplate(
-            input_variables=["question"],
-            template="Answer: {question}"
-        )
-        chain = LLMChain(llm=llm, prompt=prompt)
+        llm = ChatOpenAI(model_name="gpt-3.5-turbo")
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful assistant."),
+            ("human", "{question}")
+        ])
+        chain = prompt | llm
 
         emitter = LangChainMetadataEmitter()
         model_urn = emitter.emit_model_metadata(llm)
@@ -37,8 +37,8 @@ def test_full_integration_flow():
         assert all([model_urn, prompt_urn, chain_urn])
 
         # Test actual chain execution
-        result = chain.run("What is the capital of France?")
-        assert result == "Paris"
+        result = chain.invoke({"question": "What is the capital of France?"})
+        assert result.content == "Paris"
 
     # 3. Run LangSmith ingestion
     with patch('langsmith.Client') as mock_client:
