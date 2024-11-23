@@ -184,6 +184,22 @@ class MetadataSetup:
 
         for type_name in expected_types:
             try:
+                # Create GraphQL query with proper subselection
+                query = """
+                query getDataset($urn: String!) {
+                    dataset(urn: $urn) {
+                        urn
+                        properties {
+                            description
+                            customProperties {
+                                key
+                                value
+                            }
+                        }
+                    }
+                }
+                """
+
                 # Create dataset URN
                 type_urn = make_dataset_urn(
                     platform="datahub",
@@ -191,38 +207,63 @@ class MetadataSetup:
                     env="PROD"
                 )
 
-                # Use DataHub's dataset endpoint
-                encoded_urn = urllib.parse.quote(type_urn)
-                response = self.emitter._session.get(
-                    f"{server_url}/datasets/{encoded_urn}?aspects=datasetProperties"
+                # Make GraphQL request
+                response = self.emitter._session.post(
+                    f"{server_url}/api/graphql",
+                    json={
+                        "query": query,
+                        "variables": {
+                            "urn": type_urn
+                        }
+                    }
                 )
 
-                if response.status_code == 200:
-                    print(f"✓ Found type: {type_name}")
-                    data = response.json()
-                    if 'aspects' in data:
-                        properties = data['aspects'].get('datasetProperties', {})
-                        print(f"  Description: {properties.get('description', 'N/A')}")
+                # Debug output
+                print(f"\nVerifying type: {type_name}")
+                print(f"Response status: {response.status_code}")
+                print(f"Response headers: {response.headers}")
 
-                        # Pretty print custom properties
-                        custom_props = properties.get('customProperties', {})
-                        if custom_props:
-                            print("  Custom Properties:")
-                            for key, value in custom_props.items():
-                                if key == 'schema':
-                                    try:
-                                        schema = json.loads(value)
-                                        print(f"    schema: {json.dumps(schema, indent=4)}")
-                                    except:
-                                        print(f"    schema: {value}")
-                                else:
-                                    print(f"    {key}: {value}")
+                try:
+                    response_json = response.json()
+                    print(f"Response JSON: {json.dumps(response_json, indent=2)}")
+
+                    if response.status_code == 200:
+                        data = response_json
+                        if data and data.get('data', {}).get('dataset'):
+                            print(f"✓ Found type: {type_name}")
+                            dataset = data['data']['dataset']
+                            properties = dataset.get('properties', {})
+                            print(f"  Description: {properties.get('description', 'N/A')}")
+
+                            # Pretty print custom properties
+                            custom_props = {}
+                            for prop in properties.get('customProperties', []):
+                                key = prop.get('key')
+                                value = prop.get('value')
+                                if key and value:
+                                    custom_props[key] = value
+
+                            if custom_props:
+                                print("  Custom Properties:")
+                                for key, value in custom_props.items():
+                                    if key == 'schema':
+                                        try:
+                                            schema = json.loads(value)
+                                            print(f"    schema: {json.dumps(schema, indent=4)}")
+                                        except:
+                                            print(f"    schema: {value}")
+                                    else:
+                                        print(f"    {key}: {value}")
+                        else:
+                            print(f"✗ Type not found: {type_name}")
                     else:
-                        print(f"✗ Type found but no properties: {type_name}")
-                else:
-                    print(f"✗ Type not found: {type_name}")
-                    print(f"  Status code: {response.status_code}")
-                    print(f"  Response: {response.text}")
+                        print(f"✗ Error querying type {type_name}")
+                        print(f"  Status code: {response.status_code}")
+                        print(f"  Response: {response.text[:500]}")
+
+                except json.JSONDecodeError as e:
+                    print(f"✗ Error parsing response for {type_name}: {str(e)}")
+                    print(f"  Raw response: {response.text[:500]}")
 
             except Exception as e:
                 print(f"✗ Error verifying type {type_name}: {str(e)}")
