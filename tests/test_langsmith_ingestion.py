@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
+from freezegun import freeze_time
 
 from src.langsmith_ingestion import LangSmithIngestion
 from src.metadata_setup import DryRunEmitter
@@ -30,6 +31,9 @@ def mock_run():
     run.error = None
     run.runtime_seconds = 1.0
     run.parent_run_id = None
+    run.latency = 0.5
+    run.cost = 0.001
+    run.name = "test_run"
     return run
 
 
@@ -41,20 +45,23 @@ def mock_client():
         yield client
 
 
+@freeze_time("2024-01-01")
 def test_emit_run_metadata(mock_run):
     ingestion = LangSmithIngestion()
     ingestion.emitter = DryRunEmitter()
 
     urn = ingestion.emit_run_metadata(mock_run)
+    expected_urn = f"urn:li:dataset:(urn:li:dataPlatform:llm,run_{mock_run.id},PROD)"
+    assert urn == expected_urn
 
-    assert urn == f"urn:li:llmRun:{mock_run.id}"
     emitted = ingestion.emitter.get_emitted_mces()
     assert len(emitted) == 1
-    run_props = emitted[0]["proposedSnapshot"]["aspects"][0]["llmRunProperties"]
-    assert run_props["runId"] == mock_run.id
-    assert run_props["status"] == mock_run.status
+    run_props = emitted[0]["proposedSnapshot"]["aspects"][0]["DatasetProperties"]
+    assert run_props["customProperties"]["runId"] == mock_run.id
+    assert run_props["customProperties"]["status"] == mock_run.status
 
 
+@freeze_time("2024-01-01")
 def test_ingest_recent_runs(mock_client, mock_run):
     mock_client.list_runs.return_value = [mock_run]
 
@@ -65,5 +72,20 @@ def test_ingest_recent_runs(mock_client, mock_run):
     run_urns = ingestion.ingest_recent_runs(limit=1)
 
     assert len(run_urns) == 1
-    assert run_urns[0] == f"urn:li:llmRun:{mock_run.id}"
-    mock_client.list_runs.assert_called_once_with(limit=1)
+    expected_urn = f"urn:li:dataset:(urn:li:dataPlatform:llm,run_{mock_run.id},PROD)"
+    assert run_urns[0] == expected_urn
+
+    # Get the actual call arguments
+    call_args = mock_client.list_runs.call_args
+    assert call_args is not None
+    _, kwargs = call_args
+
+    # Verify each argument individually
+    assert kwargs["project_name"] == ingestion.project_name
+    assert kwargs["execution_order"] == 1
+    assert kwargs["limit"] == 1
+    # Verify start_time is within expected range
+    expected_start = datetime.now() - timedelta(days=7)
+    actual_start = kwargs["start_time"]
+    assert isinstance(actual_start, datetime)
+    assert abs((actual_start - expected_start).total_seconds()) < 1  # Within 1 second

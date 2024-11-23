@@ -19,14 +19,20 @@ def mock_failed_run():
     run.outputs = None
 
     # Create metadata with Mock
+    token_usage = {"prompt_tokens": 10, "completion_tokens": 20}
     metadata = Mock()
-    metadata.get = Mock(return_value={})
+    metadata.get = Mock(return_value=token_usage)
     run.execution_metadata = metadata
 
-    # Add required attributes with proper mock values
+    # Add required attributes with proper numeric values
     run.child_run_ids = []  # Empty list instead of Mock
     run.feedback_list = []
     run.tags = []
+    run.runtime_seconds = 1.0  # Use float instead of Mock
+    run.parent_run_id = None
+    run.latency = 0.5  # Use float instead of Mock
+    run.cost = 0.001  # Use float instead of Mock
+    run.name = "failed_test_run"  # Use string instead of Mock
     return run
 
 
@@ -47,14 +53,12 @@ def test_failed_run_ingestion(mock_failed_run):
     emitted = ingestion.emitter.get_emitted_mces()
 
     assert len(emitted) == 1
-    assert (
-        emitted[0]["proposedSnapshot"]["aspects"][0]["llmRunProperties"]["status"]
-        == "failed"
-    )
-    assert (
-        emitted[0]["proposedSnapshot"]["aspects"][0]["llmRunProperties"]["error"]
-        is not None
-    )
+    run_props = emitted[0]["proposedSnapshot"]["aspects"][0]["DatasetProperties"]
+    assert run_props["customProperties"]["status"] == "failed"
+    assert run_props["customProperties"]["error"] == "Test error message"
+    assert isinstance(run_props["customProperties"]["runtime"], float)
+    assert isinstance(run_props["customProperties"]["metrics"]["latency"], float)
+    assert isinstance(run_props["customProperties"]["metrics"]["cost"], float)
 
 
 def test_datahub_emission_error(mock_datahub_error, mock_llm):

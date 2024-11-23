@@ -51,7 +51,8 @@ def test_dry_run_mode(mock_llm, monkeypatch):
     emitter = LangChainMetadataEmitter()
 
     urn = emitter.emit_model_metadata(mock_llm)
-    assert urn == f"urn:li:llmModel:{mock_llm.model_name}"
+    expected_urn = f"urn:li:dataset:(urn:li:dataPlatform:llm,model_{mock_llm.model_name},PROD)"
+    assert urn == expected_urn
     assert emitter.is_dry_run == True
 
 
@@ -60,13 +61,14 @@ def test_emit_model_metadata(mock_llm):
     emitter.emitter = DryRunEmitter()
 
     urn = emitter.emit_model_metadata(mock_llm)
+    expected_urn = f"urn:li:dataset:(urn:li:dataPlatform:llm,model_{mock_llm.model_name},PROD)"
+    assert urn == expected_urn
 
-    assert urn == f"urn:li:llmModel:{mock_llm.model_name}"
     emitted = emitter.emitter.get_emitted_mces()
     assert len(emitted) == 1
-    model_props = emitted[0]["proposedSnapshot"]["aspects"][0]["llmModelProperties"]
-    assert model_props["modelName"] == mock_llm.model_name
-    assert model_props["modelType"] == "chat"
+    model_props = emitted[0]["proposedSnapshot"]["aspects"][0]["DatasetProperties"]
+    assert model_props["name"] == mock_llm.model_name
+    assert model_props["customProperties"]["modelType"] == "chat"
 
 
 def test_emit_prompt_metadata(mock_prompt):
@@ -74,30 +76,32 @@ def test_emit_prompt_metadata(mock_prompt):
     emitter.emitter = DryRunEmitter()
 
     urn = emitter.emit_prompt_metadata(mock_prompt)
+    assert "urn:li:dataset:(urn:li:dataPlatform:llm,prompt_" in urn
+    assert ",PROD)" in urn
 
-    assert "urn:li:llmPrompt:" in urn
     emitted = emitter.emitter.get_emitted_mces()
     assert len(emitted) == 1
-    prompt_props = emitted[0]["proposedSnapshot"]["aspects"][0]["llmPromptProperties"]
-    assert prompt_props["templateFormat"] == "chat"
-    assert isinstance(prompt_props["template"], str)
+    prompt_props = emitted[0]["proposedSnapshot"]["aspects"][0]["DatasetProperties"]
+    assert prompt_props["customProperties"]["templateFormat"] == "chat"
+    assert isinstance(prompt_props["customProperties"]["template"], str)
 
 
 def test_emit_chain_metadata(mock_chain, mock_llm, mock_prompt):
     emitter = LangChainMetadataEmitter()
     emitter.emitter = DryRunEmitter()
 
-    model_urn = f"urn:li:llmModel:{mock_llm.model_name}"
-    prompt_urn = "urn:li:llmPrompt:test"
+    model_urn = f"urn:li:dataset:(urn:li:dataPlatform:llm,model_{mock_llm.model_name},PROD)"
+    prompt_urn = "urn:li:dataset:(urn:li:dataPlatform:llm,prompt_test,PROD)"
 
     urn = emitter.emit_chain_metadata(mock_chain, model_urn, prompt_urn)
+    assert "urn:li:dataset:(urn:li:dataPlatform:llm,chain_" in urn
+    assert ",PROD)" in urn
 
-    assert "urn:li:llmChain:" in urn
     emitted = emitter.emitter.get_emitted_mces()
     assert len(emitted) == 1
-    chain_props = emitted[0]["proposedSnapshot"]["aspects"][0]["llmChainProperties"]
-    assert chain_props["chainType"] == "RunnableSequence"
-    assert chain_props["components"] == [model_urn, prompt_urn]
+    chain_props = emitted[0]["proposedSnapshot"]["aspects"][0]["DatasetProperties"]
+    assert chain_props["customProperties"]["chainType"] == "RunnableSequence"
+    assert chain_props["customProperties"]["components"] == [model_urn, prompt_urn]
 
 
 @pytest.mark.integration
