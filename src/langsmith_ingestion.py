@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from langsmith import Client
 from datahub.emitter.mce_builder import make_dataset_urn
 from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
-from datahub.metadata.schema_classes import DatasetSnapshotClass
+from datahub.metadata.schema_classes import DatasetSnapshotClass, StatusClass, DatasetPropertiesClass
 
 from src.metadata_setup import get_datahub_emitter, DryRunEmitter
 
@@ -104,71 +104,66 @@ class LangSmithIngestion:
             if hasattr(run, "execution_metadata") and run.execution_metadata:
                 token_usage = run.execution_metadata.get("token_usage", {})
 
-            # Create run data with proper serialization
-            run_data = {
-                "runId": str(run.id),
-                "name": str(getattr(run, "name", "")),
-                "startTime": str(run.start_time),
-                "endTime": str(run.end_time),
-                "status": str(run.status),
-                "inputs": dict(run.inputs),
-                "outputs": dict(run.outputs) if run.outputs else None,
-                "error": error_message,
-                "runtime": float(getattr(run, "runtime_seconds", 0)),
-                "parentRunId": str(run.parent_run_id) if getattr(run, "parent_run_id", None) else None,
-                "childRunIds": [str(id) for id in getattr(run, "child_run_ids", [])],
-                "tags": list(getattr(run, "tags", [])),
-                "feedback": [],  # Empty list for now
-                "metrics": {
-                    "tokenUsage": {
-                        "promptTokens": token_usage.get("prompt_tokens"),
-                        "completionTokens": token_usage.get("completion_tokens"),
-                        "totalTokens": token_usage.get("total_tokens"),
-                    },
-                    "latency": float(getattr(run, "latency", 0)),
-                    "cost": float(getattr(run, "cost", 0)),
-                },
-            }
-
-            # Use dataset URN format
+            # Create dataset URN
             run_urn = make_dataset_urn(
                 platform="llm",
                 name=f"run_{run.id}",
                 env="PROD"
             )
 
-            # Create metadata with proper structure
-            metadata = {
-                "proposedSnapshot": {
-                    "urn": run_urn,
-                    "aspects": [
-                        {
-                            "com.linkedin.common.Status": {
-                                "removed": False
-                            }
-                        },
-                        {
-                            "com.linkedin.common.DatasetProperties": {
-                                "description": f"LangSmith Run {run.id}",
-                                "customProperties": run_data,
-                                "name": str(run.id)
-                            }
-                        }
-                    ]
-                },
-                "systemMetadata": {
-                    "lastObserved": int(datetime.now().timestamp() * 1000),
-                    "runId": "langsmith-ingestion"
-                }
+            # Create Status aspect
+            status = StatusClass(removed=False)
+
+            # Create Properties aspect with only string values
+            # Note: All values must be strings for DataHub's schema validation
+            custom_properties = {
+                "runId": str(run.id),
+                "name": str(getattr(run, "name", "")),
+                "startTime": str(run.start_time),
+                "endTime": str(run.end_time),
+                "status": str(run.status),
+                "inputs": json.dumps(dict(run.inputs)),
+                "outputs": json.dumps(dict(run.outputs)) if run.outputs else "",
+                "error": error_message if error_message else "",
+                "runtime": str(float(getattr(run, "runtime_seconds", 0))),
+                "parentRunId": str(run.parent_run_id) if getattr(run, "parent_run_id", None) else "",
+                "childRunIds": json.dumps([str(id) for id in getattr(run, "child_run_ids", [])]),
+                "tags": json.dumps(list(getattr(run, "tags", []))),
+                "feedback": json.dumps([]),
+                "tokenUsage": json.dumps({
+                    "promptTokens": token_usage.get("prompt_tokens", 0),
+                    "completionTokens": token_usage.get("completion_tokens", 0),
+                    "totalTokens": token_usage.get("total_tokens", 0),
+                }),
+                "latency": str(float(getattr(run, "latency", 0))),
+                "cost": str(float(getattr(run, "cost", 0))),
             }
 
-            print(f"\nDEBUG: Emitting metadata:")
-            print(json.dumps(metadata, indent=2))
+            properties = DatasetPropertiesClass(
+                description=f"LangSmith Run {run.id}",
+                name=str(run.id),
+                customProperties=custom_properties
+            )
 
-            return self.emit_metadata(metadata)
+            # Create DatasetSnapshot
+            snapshot = DatasetSnapshotClass(
+                urn=run_urn,
+                aspects=[status, properties]
+            )
+
+            # Create MetadataChangeEvent
+            mce = MetadataChangeEvent(
+                proposedSnapshot=snapshot
+            )
+
+            # Emit and return URN
+            self.emitter.emit(mce)
+            return run_urn
+
         except Exception as e:
-            print(f"\nDEBUG: Error in emit_run_metadata: {str(e)}")
             print(f"Error processing run {run.id}: {str(e)}")
+            if not self.is_dry_run:
+                raise  # Re-raise exception in live mode
             return None
 
     def ingest_recent_runs(self, limit=100, days_ago=7):

@@ -1,20 +1,22 @@
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Union
-from datetime import datetime
 
 from dotenv import load_dotenv, find_dotenv
-
 from datahub.emitter.mce_builder import make_dataset_urn
 from datahub.emitter.rest_emitter import DatahubRestEmitter
+from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
+from datahub.metadata.com.linkedin.pegasus2avro.metadata.snapshot import DatasetSnapshot
 from datahub.metadata.schema_classes import (
-    MetadataChangeEventClass,
     DatasetSnapshotClass,
     DatasetPropertiesClass,
+    StatusClass,
+    MetadataChangeEventClass,
 )
 
-# Find and load the .env file from the project root
+# Find and load the .env file
 ENV_FILE = find_dotenv()
 if ENV_FILE:
     load_dotenv(ENV_FILE, override=True)
@@ -22,7 +24,6 @@ if ENV_FILE:
 else:
     print("Warning: No .env file found")
 
-# Print environment variables for debugging
 print(f"DATAHUB_DRY_RUN: {os.getenv('DATAHUB_DRY_RUN')}")
 print(f"DATAHUB_GMS_URL: {os.getenv('DATAHUB_GMS_URL')}")
 print(f"DATAHUB_TOKEN: {'Set' if os.getenv('DATAHUB_TOKEN') else 'Not set'}")
@@ -73,32 +74,47 @@ class DataHubEmitter(DatahubRestEmitter):
 
     def __init__(self, gms_server: str = None, token: str = None):
         super().__init__(gms_server=gms_server, token=token)
+        print("\n=== DataHub Emitter Setup ===")
+        print(f"GMS Server: {gms_server}")
+        print(f"Token Present: {'yes' if token else 'no'}")
+
         # Add auth header to session
         if token:
-            self._session.headers.update({"Authorization": f"Bearer {token}"})
+            self._session.headers.update({
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            })
+            print("Added auth headers")
+            print(f"Current headers: {self._session.headers}")
 
     def emit(self, mce: Union[dict, MetadataChangeEventClass]) -> None:
         """Emit metadata with proper error handling"""
         try:
-            # Test connection first
-            self.test_connection()
+            print("\n=== Emitting Metadata ===")
+            print(f"MCE Type: {type(mce)}")
 
-            # Convert all URNs to dataset URNs
+            # Convert dict to MetadataChangeEvent if needed
             if isinstance(mce, dict):
-                urn = mce["proposedSnapshot"]["urn"]
-                if not urn.startswith("urn:li:dataset:"):
-                    # Convert custom URN to dataset URN
-                    entity_type = urn.split(":")[2]
-                    name = urn.split(":")[3]
-                    mce["proposedSnapshot"]["urn"] = make_dataset_urn(
-                        platform=entity_type,
-                        name=name,
-                        env="PROD"
-                    )
+                print(f"URN: {mce['proposedSnapshot']['urn']}")
+                print("Converting dict to MetadataChangeEvent...")
+
+                # Create DatasetSnapshot
+                snapshot = DatasetSnapshotClass(
+                    urn=mce["proposedSnapshot"]["urn"],
+                    aspects=mce["proposedSnapshot"]["aspects"]
+                )
+
+                # Create MetadataChangeEvent
+                mce = MetadataChangeEvent(
+                    proposedSnapshot=snapshot
+                )
+                print("Conversion complete")
 
             # Emit the MCE
             super().emit(mce)
+            print("Metadata emitted successfully")
         except Exception as e:
+            print(f"Error emitting metadata: {str(e)}")
             raise Exception(f"Failed to emit metadata to DataHub: {str(e)}")
 
 
@@ -107,28 +123,38 @@ def get_datahub_emitter(
 ) -> Union[DataHubEmitter, DryRunEmitter]:
     """Get the appropriate emitter based on configuration"""
     # Explicitly convert to boolean and handle case
-    dry_run_value = os.getenv("DATAHUB_DRY_RUN", "false")
-    is_dry_run = dry_run_value.lower() in ["true", "1", "yes", "on"]
+    is_dry_run = str(os.getenv("DATAHUB_DRY_RUN", "false")).lower() == "true"
 
     # Get server and token from environment
     gms_server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
     token = os.getenv("DATAHUB_TOKEN")
 
-    if not token and not is_dry_run:
-        print("\nWarning: DATAHUB_TOKEN not set. Authentication may fail.")
+    print("\n=== DataHub Connection Details ===")
+    print(f"GMS Server: {gms_server}")
+    print(f"Token Present: {'yes' if token else 'no'}")
+    print(f"Dry Run Mode: {is_dry_run}")
 
     try:
         if is_dry_run:
-            # Return DryRunEmitter without printing message
+            print("Using DryRunEmitter")
             return DryRunEmitter()
 
         # Create emitter with token
+        print("\nCreating DataHub emitter...")
         emitter = DataHubEmitter(gms_server=gms_server, token=token)
 
         # Test connection
-        emitter.test_connection()
+        print("Testing connection...")
+        response = emitter._session.get(f"{gms_server}/health")
+        print(f"Health check response: {response.status_code}")
+        print(f"Response content: {response.text}")
+
+        if response.status_code != 200:
+            raise Exception(f"Health check failed: {response.status_code}")
+
         return emitter
     except Exception as e:
+        print(f"\nError connecting to DataHub: {str(e)}")
         if is_dry_run:
             return DryRunEmitter()
         else:
@@ -165,62 +191,35 @@ class MetadataSetup:
                 env="PROD"
             )
 
-            # Create a simpler metadata structure that matches DataHub's schema
-            mce = MetadataChangeEventClass(
-                proposedSnapshot=DatasetSnapshotClass(
-                    urn=type_urn,
-                    aspects=[
-                        {
-                            "com.linkedin.common.Status": {
-                                "removed": False
-                            }
-                        },
-                        {
-                            "com.linkedin.common.DatasetProperties": {
-                                "description": f"Custom type for {type_def['entityType']}",
-                                "customProperties": {
-                                    "entityType": type_def["entityType"],
-                                    "schema": json.dumps(type_def["aspectSpecs"])
-                                }
-                            }
-                        }
-                    ]
-                )
+            # Create Status aspect
+            status = StatusClass(removed=False)
+
+            # Create Properties aspect
+            properties = DatasetPropertiesClass(
+                description=f"Custom type for {type_def['entityType']}",
+                name=type_def["entityType"],
+                customProperties={
+                    "entityType": type_def["entityType"],
+                    "schema": json.dumps(type_def["aspectSpecs"])
+                }
             )
 
-            # Emit the MCE
-            if isinstance(self.emitter, DryRunEmitter):
-                # For dry run, convert to dict
-                mce_dict = {
-                    "proposedSnapshot": {
-                        "urn": type_urn,
-                        "aspects": [
-                            {
-                                "com.linkedin.common.Status": {
-                                    "removed": False
-                                }
-                            },
-                            {
-                                "com.linkedin.common.DatasetProperties": {
-                                    "description": f"Custom type for {type_def['entityType']}",
-                                    "customProperties": {
-                                        "entityType": type_def["entityType"],
-                                        "schema": json.dumps(type_def["aspectSpecs"])
-                                    }
-                                }
-                            }
-                        ]
-                    },
-                    "systemMetadata": {
-                        "lastObserved": int(datetime.now().timestamp() * 1000),
-                        "runId": "metadata-setup"
-                    }
-                }
-                self.emitter.emit(mce_dict)
-            else:
-                # For real emitter, use MetadataChangeEventClass
-                self.emitter.emit(mce)
+            # Create DatasetSnapshot
+            snapshot = DatasetSnapshotClass(
+                urn=type_urn,
+                aspects=[status, properties]
+            )
 
+            # Create MetadataChangeEvent
+            mce = MetadataChangeEventClass(
+                proposedSnapshot=snapshot
+            )
+
+            print(f"\nRegistering type {type_def['entityType']}...")
+            print(f"URN: {type_urn}")
+
+            # Emit the metadata
+            self.emitter.emit(mce)
             print(f"Successfully registered type from {file_path.name}")
             return True
         except Exception as e:
