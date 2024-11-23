@@ -32,19 +32,56 @@ class LangSmithIngestion:
         """Emit metadata for a single LangSmith run"""
         run_urn = f"urn:li:llmRun:{run.id}"
 
+        # Extract token usage if available
+        token_usage = {}
+        if hasattr(run, 'execution_metadata') and run.execution_metadata:
+            token_usage = run.execution_metadata.get('token_usage', {})
+
+        # Get feedback if available
+        feedback_list = []
+        if hasattr(run, 'feedback_list'):
+            feedback_list = [
+                {
+                    "key": fb.key,
+                    "value": fb.value,
+                    "comment": fb.comment,
+                    "timestamp": str(fb.timestamp)
+                }
+                for fb in run.feedback_list
+            ]
+
         mce = MetadataChangeEvent(
             proposedSnapshot={
                 "urn": run_urn,
                 "aspects": [{
                     "llmRunProperties": {
                         "runId": run.id,
+                        "name": getattr(run, 'name', None),
                         "startTime": str(run.start_time),
                         "endTime": str(run.end_time),
                         "status": run.status,
                         "inputs": run.inputs,
                         "outputs": run.outputs,
                         "error": getattr(run, 'error', None),
-                        "runtime": getattr(run, 'runtime_seconds', None)
+                        "runtime": getattr(run, 'runtime_seconds', None),
+                        "parentRunId": getattr(run, 'parent_run_id', None),
+                        "childRunIds": getattr(run, 'child_run_ids', []),
+                        "tags": getattr(run, 'tags', []),
+                        "feedback": feedback_list,
+                        "metrics": {
+                            "tokenUsage": {
+                                "promptTokens": token_usage.get('prompt_tokens'),
+                                "completionTokens": token_usage.get('completion_tokens'),
+                                "totalTokens": token_usage.get('total_tokens')
+                            },
+                            "latency": getattr(run, 'latency', None),
+                            "cost": getattr(run, 'cost', None)
+                        },
+                        "trace": {
+                            "projectName": getattr(run, 'project_name', None),
+                            "sessionName": getattr(run, 'session_name', None),
+                            "executionOrder": getattr(run, 'execution_order', None)
+                        }
                     }
                 }]
             }
