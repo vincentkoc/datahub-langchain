@@ -1,8 +1,11 @@
-.PHONY: install test lint clean dry-run run venv dev format
+.PHONY: install test lint clean dry-run run venv dev format check-connection setup-token
 
 PYTHON := python3
 VENV := .venv
 BIN := $(VENV)/bin
+DATAHUB_SECRET := $(shell cat .env | grep DATAHUB_SECRET | cut -d '=' -f2)
+DATAHUB_TOKEN := $(shell cat .env | grep DATAHUB_TOKEN | cut -d '=' -f2)
+DATAHUB_GMS_URL := $(shell cat .env | grep DATAHUB_GMS_URL | cut -d '=' -f2)
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -52,7 +55,27 @@ run:
 
 # Docker commands
 docker-up:
-	datahub docker quickstart --quickstart-compose-file docker-compose-quickstart.yml
+	@if [ ! -f .env ]; then \
+		echo "Creating .env file..."; \
+		cp .env.example .env; \
+	fi
+	DATAHUB_SECRET=${DATAHUB_SECRET} datahub docker quickstart --quickstart-compose-file docker-compose-quickstart.yml
 
 docker-down:
 	datahub docker quickstart --stop
+
+check-connection:
+	@echo "Testing DataHub connection..."
+	curl -s -H "Authorization: Bearer ${DATAHUB_TOKEN}" ${DATAHUB_GMS_URL}/health | grep -q "true" \
+		&& echo "Connection successful" \
+		|| (echo "Connection failed. Make sure DataHub is running and your token is correct." && exit 1)
+
+setup-token:
+	@echo "Creating DataHub token..."
+	@curl -X POST ${DATAHUB_GMS_URL}/api/v2/generate-personal-access-token \
+		-H "Content-Type: application/json" \
+		-d '{"type": "PERSONAL", "duration": "P30D", "name": "cli-token"}' \
+		-u datahub:datahub \
+		| jq -r '.accessToken' > .datahub-token
+	@echo "Token saved to .datahub-token"
+	@echo "Please add this token to your .env file as DATAHUB_TOKEN"
