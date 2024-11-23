@@ -2,6 +2,9 @@ import json
 import os
 from pathlib import Path
 from typing import Union
+from datetime import datetime
+
+from dotenv import load_dotenv, find_dotenv
 
 from datahub.emitter.mce_builder import make_dataset_urn
 from datahub.emitter.rest_emitter import DatahubRestEmitter
@@ -10,6 +13,19 @@ from datahub.metadata.schema_classes import (
     DatasetSnapshotClass,
     DatasetPropertiesClass,
 )
+
+# Find and load the .env file from the project root
+ENV_FILE = find_dotenv()
+if ENV_FILE:
+    load_dotenv(ENV_FILE, override=True)
+    print(f"Loaded environment from: {ENV_FILE}")
+else:
+    print("Warning: No .env file found")
+
+# Print environment variables for debugging
+print(f"DATAHUB_DRY_RUN: {os.getenv('DATAHUB_DRY_RUN')}")
+print(f"DATAHUB_GMS_URL: {os.getenv('DATAHUB_GMS_URL')}")
+print(f"DATAHUB_TOKEN: {'Set' if os.getenv('DATAHUB_TOKEN') else 'Not set'}")
 
 
 class DryRunEmitter:
@@ -90,36 +106,30 @@ def get_datahub_emitter(
     gms_server: str = None,
 ) -> Union[DataHubEmitter, DryRunEmitter]:
     """Get the appropriate emitter based on configuration"""
-    is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
-
-    if is_dry_run:
-        print(
-            "\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub"
-        )
-        return DryRunEmitter()
+    # Explicitly convert to boolean and handle case
+    dry_run_value = os.getenv("DATAHUB_DRY_RUN", "false")
+    is_dry_run = dry_run_value.lower() in ["true", "1", "yes", "on"]
 
     # Get server and token from environment
-    gms_server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:9002/api/gms")
+    gms_server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
     token = os.getenv("DATAHUB_TOKEN")
 
     if not token and not is_dry_run:
         print("\nWarning: DATAHUB_TOKEN not set. Authentication may fail.")
 
     try:
+        if is_dry_run:
+            # Return DryRunEmitter without printing message
+            return DryRunEmitter()
+
         # Create emitter with token
         emitter = DataHubEmitter(gms_server=gms_server, token=token)
-
-        # Add auth header explicitly
-        if token:
-            emitter._session.headers.update({"Authorization": f"Bearer {token}"})
 
         # Test connection
         emitter.test_connection()
         return emitter
     except Exception as e:
         if is_dry_run:
-            print(f"\nWarning: Could not connect to DataHub ({str(e)})")
-            print("Continuing in dry run mode - metadata will be printed but not sent to DataHub")
             return DryRunEmitter()
         else:
             raise Exception(
@@ -155,28 +165,68 @@ class MetadataSetup:
                 env="PROD"
             )
 
-            # Create properties aspect
-            properties = {
-                "DatasetProperties": {
-                    "name": type_def["entityType"],
-                    "description": f"Custom type for {type_def['entityType']}",
-                    "customProperties": type_def
-                }
-            }
+            # Create a simpler metadata structure that matches DataHub's schema
+            mce = MetadataChangeEventClass(
+                proposedSnapshot=DatasetSnapshotClass(
+                    urn=type_urn,
+                    aspects=[
+                        {
+                            "com.linkedin.common.Status": {
+                                "removed": False
+                            }
+                        },
+                        {
+                            "com.linkedin.common.DatasetProperties": {
+                                "description": f"Custom type for {type_def['entityType']}",
+                                "customProperties": {
+                                    "entityType": type_def["entityType"],
+                                    "schema": json.dumps(type_def["aspectSpecs"])
+                                }
+                            }
+                        }
+                    ]
+                )
+            )
 
-            # Create MCE dict directly
-            mce_dict = {
-                "proposedSnapshot": {
-                    "urn": type_urn,
-                    "aspects": [properties]
+            # Emit the MCE
+            if isinstance(self.emitter, DryRunEmitter):
+                # For dry run, convert to dict
+                mce_dict = {
+                    "proposedSnapshot": {
+                        "urn": type_urn,
+                        "aspects": [
+                            {
+                                "com.linkedin.common.Status": {
+                                    "removed": False
+                                }
+                            },
+                            {
+                                "com.linkedin.common.DatasetProperties": {
+                                    "description": f"Custom type for {type_def['entityType']}",
+                                    "customProperties": {
+                                        "entityType": type_def["entityType"],
+                                        "schema": json.dumps(type_def["aspectSpecs"])
+                                    }
+                                }
+                            }
+                        ]
+                    },
+                    "systemMetadata": {
+                        "lastObserved": int(datetime.now().timestamp() * 1000),
+                        "runId": "metadata-setup"
+                    }
                 }
-            }
+                self.emitter.emit(mce_dict)
+            else:
+                # For real emitter, use MetadataChangeEventClass
+                self.emitter.emit(mce)
 
-            self.emitter.emit(mce_dict)
             print(f"Successfully registered type from {file_path.name}")
             return True
         except Exception as e:
             print(f"Error registering type from {file_path.name}: {str(e)}")
+            if not isinstance(self.emitter, DryRunEmitter):
+                raise
             return False
 
 

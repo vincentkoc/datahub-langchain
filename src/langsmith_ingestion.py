@@ -1,13 +1,12 @@
 import json
 import os
 from datetime import datetime, timedelta
-from unittest.mock import Mock
 from uuid import UUID
 
 from dotenv import load_dotenv
 from langsmith import Client
 
-from src.metadata_setup import get_datahub_emitter, make_dataset_urn
+from src.metadata_setup import get_datahub_emitter, make_dataset_urn, DryRunEmitter
 
 load_dotenv()
 
@@ -23,22 +22,23 @@ class JSONEncoder(json.JSONEncoder):
 
 class LangSmithIngestion:
     def __init__(self, gms_server: str = None):
+        # Default to GMS endpoint if not specified
+        if not gms_server:
+            gms_server = os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+
         self.emitter = get_datahub_emitter(gms_server)
         self.client = Client()
-        self.is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
         self.project_name = os.getenv("LANGCHAIN_PROJECT", "default")
 
-    def serialize_run_data(self, data):
-        """Serialize run data, converting UUIDs to strings"""
-        return json.loads(json.dumps(data, cls=JSONEncoder))
+    @property
+    def is_dry_run(self) -> bool:
+        """Determine dry run mode from emitter type"""
+        return isinstance(self.emitter, DryRunEmitter)
 
     def emit_metadata(self, mce_dict: dict) -> str:
         """Emit metadata with dry run handling"""
         try:
-            if self.is_dry_run:
-                print(
-                    f"\nDRY RUN: Would emit metadata for {mce_dict['proposedSnapshot']['urn']}"
-                )
+            # Let the emitter handle dry run mode
             self.emitter.emit(mce_dict)
             return mce_dict["proposedSnapshot"]["urn"]
         except Exception as e:
@@ -51,13 +51,6 @@ class LangSmithIngestion:
 
     def emit_run_metadata(self, run):
         """Emit metadata for a single LangSmith run"""
-        # Use dataset URN format for now
-        run_urn = make_dataset_urn(
-            platform="llm",
-            name=f"run_{run.id}",
-            env="PROD"
-        )
-
         try:
             # Clean up error message if present
             error_message = None
@@ -69,8 +62,6 @@ class LangSmithIngestion:
             token_usage = {}
             if hasattr(run, "execution_metadata") and run.execution_metadata:
                 token_usage = run.execution_metadata.get("token_usage", {})
-                if isinstance(token_usage, Mock):  # Handle mock objects
-                    token_usage = {"prompt_tokens": 10, "completion_tokens": 20}
 
             # Create run data with proper serialization
             run_data = {
@@ -98,6 +89,13 @@ class LangSmithIngestion:
                 },
             }
 
+            # Use dataset URN format
+            run_urn = make_dataset_urn(
+                platform="llm",
+                name=f"run_{run.id}",
+                env="PROD"
+            )
+
             mce_dict = {
                 "proposedSnapshot": {
                     "urn": run_urn,
@@ -120,9 +118,6 @@ class LangSmithIngestion:
 
     def ingest_recent_runs(self, limit=100, days_ago=7):
         """Ingest metadata from recent LangSmith runs"""
-        if self.is_dry_run:
-            print(f"\nDRY RUN: Fetching up to {limit} recent runs from LangSmith")
-
         # Get runs from the last X days
         start_time = datetime.now() - timedelta(days=days_ago)
 
@@ -160,14 +155,14 @@ class LangSmithIngestion:
 
 
 def main():
-    is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
-    if is_dry_run:
-        print(
-            "\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub"
-        )
-
     ingestion = LangSmithIngestion()
-    print("Starting LangSmith metadata ingestion...")
+    print("\nStarting LangSmith metadata ingestion...")
+    print(f"DataHub GMS URL: {os.getenv('DATAHUB_GMS_URL')}")
+
+    # Get dry run mode from environment directly
+    dry_run_value = os.getenv("DATAHUB_DRY_RUN", "false")
+    is_dry_run = dry_run_value.lower() in ["true", "1", "yes", "on"]
+    print(f"Mode: {'DRY RUN' if is_dry_run else 'LIVE'}")
 
     try:
         run_urns = ingestion.ingest_recent_runs()
@@ -175,10 +170,10 @@ def main():
         if is_dry_run:
             print("DRY RUN complete - metadata was printed but not sent to DataHub")
         else:
-            print("Ingestion complete!")
+            print("Ingestion complete - metadata was sent to DataHub!")
     except Exception as e:
         print(f"Error during ingestion: {str(e)}")
-        if not self.is_dry_run:
+        if not is_dry_run:
             raise
 
 
