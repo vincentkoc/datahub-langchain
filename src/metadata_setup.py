@@ -81,7 +81,7 @@ def get_datahub_emitter(
 
     if is_dry_run:
         print(
-            "Running in DRY RUN mode - metadata will be printed but not sent to DataHub"
+            "\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub"
         )
         return DryRunEmitter()
 
@@ -93,8 +93,16 @@ def get_datahub_emitter(
         emitter.test_connection()
         return emitter
     except Exception as e:
-        print(f"Warning: Could not connect to DataHub ({str(e)}). Falling back to dry run mode.")
-        return DryRunEmitter()
+        if is_dry_run:
+            print(f"\nWarning: Could not connect to DataHub ({str(e)})")
+            print("Continuing in dry run mode - metadata will be printed but not sent to DataHub")
+            return DryRunEmitter()
+        else:
+            raise Exception(
+                f"Could not connect to DataHub at {gms_server}. "
+                f"Error: {str(e)}. "
+                "Set DATAHUB_DRY_RUN=true to run without DataHub connection."
+            )
 
 
 class MetadataSetup:
