@@ -1,0 +1,48 @@
+{
+  "entityType": "llmModel",
+  "aspectSpecs": [
+    {
+      "name": "llmModelProperties",
+      "version": 1,
+      "jsonSchema": {
+        "type": "object",
+        "properties": {
+          "modelName": { "type": "string" },
+          "provider": { "type": "string" },
+          "parameters": { "type": "object" },
+          "modelFamily": { "type": "string" },
+          "modelType": { "type": "string", "enum": ["text", "chat", "embedding"] },
+          "contextWindow": { "type": "integer" },
+          "tokenLimit": { "type": "integer" },
+          "costPerToken": { "type": "number" },
+          "icon": {
+            "type": "string",
+            "description": "URL or Base64 encoded icon"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "text-generation",
+                "chat",
+                "embeddings",
+                "code-generation",
+                "function-calling"
+              ]
+            }
+          },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "averageLatency": { "type": "number" },
+              "tokenThroughput": { "type": "number" },
+              "errorRate": { "type": "number" }
+            }
+          }
+        },
+        "required": ["modelName", "provider"]
+      }
+    }
+  ]
+}
