@@ -6,7 +6,7 @@ from uuid import UUID
 from dotenv import load_dotenv
 from langsmith import Client
 
-from .metadata_setup import get_datahub_emitter
+from src.metadata_setup import get_datahub_emitter
 
 load_dotenv()
 

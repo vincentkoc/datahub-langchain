@@ -8,7 +8,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnableSequence
 from langchain_openai import ChatOpenAI
 
-from .metadata_setup import get_datahub_emitter
+from src.metadata_setup import get_datahub_emitter
 
 load_dotenv()
 
