@@ -52,7 +52,7 @@ run:
 
 # Docker commands
 docker-up:
-	datahub docker quickstart
+	datahub docker quickstart --quickstart-compose-file docker-compose-quickstart.yml
 
 docker-down:
-	datahub docker nuke
+	datahub docker quickstart --stop
