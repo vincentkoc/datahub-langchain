@@ -8,13 +8,20 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnableSequence
 from langchain_openai import ChatOpenAI
 
-from src.metadata_setup import get_datahub_emitter
+from src.metadata_setup import get_datahub_emitter, make_dataset_urn
 
 load_dotenv()
 
 
 class LangChainMetadataEmitter:
     def __init__(self, gms_server: str = None):
+        # Default to GMS endpoint if not specified
+        if not gms_server:
+            gms_server = os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+            # If using frontend, append /api/gms
+            if ":9002" in gms_server:
+                gms_server = f"{gms_server}/api/gms"
+
         self.emitter = get_datahub_emitter(gms_server)
         self.is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
 
@@ -37,25 +44,28 @@ class LangChainMetadataEmitter:
 
     def emit_model_metadata(self, model):
         """Emit metadata for an LLM model"""
-        model_urn = f"urn:li:llmModel:{model.model_name}"
+        # Use dataset URN format
+        model_urn = make_dataset_urn(
+            platform="llm",
+            name=f"model_{model.model_name}",
+            env="PROD"
+        )
 
         mce_dict = {
             "proposedSnapshot": {
                 "urn": model_urn,
                 "aspects": [
                     {
-                        "llmModelProperties": {
-                            "modelName": model.model_name,
-                            "provider": "OpenAI",
-                            "parameters": model.model_kwargs,
-                            "modelFamily": "GPT",
-                            "modelType": "chat",
-                            "capabilities": ["chat", "text-generation"],
-                            "metrics": {
-                                "averageLatency": None,
-                                "tokenThroughput": None,
-                                "errorRate": None,
-                            },
+                        "DatasetProperties": {
+                            "name": model.model_name,
+                            "description": "LLM Model",
+                            "customProperties": {
+                                "provider": "OpenAI",
+                                "parameters": model.model_kwargs,
+                                "modelFamily": "GPT",
+                                "modelType": "chat",
+                                "capabilities": ["chat", "text-generation"],
+                            }
                         }
                     }
                 ],
@@ -87,30 +97,38 @@ class LangChainMetadataEmitter:
         # Create a stable string for hashing
         prompt_str = json.dumps(formatted_messages, sort_keys=True)
         prompt_id = hash(prompt_str)
-        prompt_urn = f"urn:li:llmPrompt:{prompt_id}"
+        prompt_urn = make_dataset_urn(
+            platform="llm",
+            name=f"prompt_{prompt_id}",
+            env="PROD"
+        )
 
         mce_dict = {
             "proposedSnapshot": {
                 "urn": prompt_urn,
                 "aspects": [
                     {
-                        "llmPromptProperties": {
-                            "template": json.dumps(formatted_messages, indent=2),
-                            "inputVariables": list(prompt.input_variables),
-                            "templateFormat": "chat",
-                            "category": "System",
-                            "metadata": {
-                                "description": "Chat prompt with system and human messages",
-                                "createdAt": datetime.now().isoformat(),
-                                "usage": {
-                                    "totalCalls": 0,
-                                    "successRate": 0.0,
-                                    "averageTokens": 0,
+                        "DatasetProperties": {
+                            "name": f"prompt_{prompt_id}",
+                            "description": "Chat prompt with system and human messages",
+                            "customProperties": {
+                                "template": json.dumps(formatted_messages, indent=2),
+                                "inputVariables": list(prompt.input_variables),
+                                "templateFormat": "chat",
+                                "category": "System",
+                                "metadata": {
+                                    "description": "Chat prompt with system and human messages",
+                                    "createdAt": datetime.now().isoformat(),
+                                    "usage": {
+                                        "totalCalls": 0,
+                                        "successRate": 0.0,
+                                        "averageTokens": 0,
+                                    },
                                 },
-                            },
-                            "version": "1.0",
-                            "tags": ["chat", "system-prompt"],
-                            "examples": [],
+                                "version": "1.0",
+                                "tags": ["chat", "system-prompt"],
+                                "examples": [],
+                            }
                         }
                     }
                 ],
@@ -121,37 +139,45 @@ class LangChainMetadataEmitter:
     def emit_chain_metadata(self, chain, model_urn, prompt_urn):
         """Emit metadata for an LLM chain"""
         chain_id = id(chain)
-        chain_urn = f"urn:li:llmChain:{chain_id}"
+        chain_urn = make_dataset_urn(
+            platform="llm",
+            name=f"chain_{chain_id}",
+            env="PROD"
+        )
 
         mce_dict = {
             "proposedSnapshot": {
                 "urn": chain_urn,
                 "aspects": [
                     {
-                        "llmChainProperties": {
-                            "chainType": "RunnableSequence",
-                            "components": [model_urn, prompt_urn],
+                        "DatasetProperties": {
+                            "name": f"chain_{chain_id}",
                             "description": "LangChain component for processing and generating text",
-                            "category": "Generation",
-                            "configuration": {
-                                "maxRetries": 3,
-                                "verbose": False,
-                                "callbacks": [],
-                            },
-                            "performance": {
-                                "averageLatency": None,
-                                "successRate": None,
-                                "costPerRun": None,
-                            },
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {"question": {"type": "string"}},
-                                "required": ["question"],
-                            },
-                            "outputSchema": {
-                                "type": "object",
-                                "properties": {"content": {"type": "string"}},
-                            },
+                            "customProperties": {
+                                "chainType": "RunnableSequence",
+                                "components": [model_urn, prompt_urn],
+                                "description": "LangChain component for processing and generating text",
+                                "category": "Generation",
+                                "configuration": {
+                                    "maxRetries": 3,
+                                    "verbose": False,
+                                    "callbacks": [],
+                                },
+                                "performance": {
+                                    "averageLatency": None,
+                                    "successRate": None,
+                                    "costPerRun": None,
+                                },
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {"question": {"type": "string"}},
+                                    "required": ["question"],
+                                },
+                                "outputSchema": {
+                                    "type": "object",
+                                    "properties": {"content": {"type": "string"}},
+                                },
+                            }
                         }
                     }
                 ],
