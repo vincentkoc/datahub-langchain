@@ -17,10 +17,25 @@ def mock_failed_run():
     run.error = "Test error message"
     run.inputs = {"test": "input"}
     run.outputs = None
-    run.execution_metadata = {"token_usage": {}}
-    run.execution_metadata.get = lambda x, default=None: {} if x == "token_usage" else default
+
+    # Create metadata with Mock
+    metadata = Mock()
+    metadata.get = Mock(return_value={})
+    run.execution_metadata = metadata
+
+    # Add required attributes with proper mock values
+    run.child_run_ids = []  # Empty list instead of Mock
     run.feedback_list = []
+    run.tags = []
     return run
+
+
+@pytest.fixture
+def mock_llm():
+    llm = Mock()
+    llm.model_name = "gpt-4o-mini"
+    llm.model_kwargs = {"temperature": 0.7}
+    return llm
 
 
 def test_failed_run_ingestion(mock_failed_run):
@@ -45,6 +60,7 @@ def test_failed_run_ingestion(mock_failed_run):
 def test_datahub_emission_error(mock_datahub_error, mock_llm):
     """Test handling of DataHub emission errors"""
     emitter = LangChainMetadataEmitter()
+    emitter.is_dry_run = False  # Force non-dry run mode
 
     # Mock emitter to raise error
     class ErrorEmitter:

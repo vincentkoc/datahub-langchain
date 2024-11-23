@@ -161,13 +161,18 @@ class LangChainMetadataEmitter:
 
     def get_provider_icon(self, provider: str) -> str:
         """Get provider icon"""
-        # Add icon lookup logic here
-        return ""
+        provider = provider.lower()
+        # Add base64 encoded SVG icons
+        icons = {
+            "openai": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiPjwvc3ZnPg==",
+            "langchain": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiPjwvc3ZnPg=="
+        }
+        return icons.get(provider, "")
 
     def get_chain_icon(self, chain_type: str) -> str:
         """Get chain icon"""
-        # Add icon lookup logic here
-        return ""
+        # Default to LangChain icon
+        return self.get_provider_icon("langchain")
 
 
 def run_example():

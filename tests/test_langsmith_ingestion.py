@@ -17,20 +17,19 @@ def mock_run():
     run.inputs = {"test": "input"}
     run.outputs = {"test": "output"}
 
-    # Create proper execution metadata
+    # Create proper execution metadata with Mock
     token_usage = {"prompt_tokens": 10, "completion_tokens": 20}
-    run.execution_metadata = {"token_usage": token_usage}
+    metadata = Mock()
+    metadata.get = Mock(return_value=token_usage)
+    run.execution_metadata = metadata
 
-    # Create empty feedback list
+    # Create empty lists for required attributes
+    run.child_run_ids = []  # Empty list instead of Mock
     run.feedback_list = []
+    run.tags = []
     run.error = None
     run.runtime_seconds = 1.0
     run.parent_run_id = None
-    run.child_run_ids = []
-    run.tags = []
-
-    # Mock the get method
-    run.execution_metadata.get = lambda x, default=None: token_usage if x == "token_usage" else default
     return run
 
 

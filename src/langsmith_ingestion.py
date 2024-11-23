@@ -52,73 +52,77 @@ class LangSmithIngestion:
         """Emit metadata for a single LangSmith run"""
         run_urn = f"urn:li:llmRun:{run.id}"
 
-        # Clean up error message if present
-        error_message = None
-        if hasattr(run, "error") and run.error:
-            # Extract just the main error message without the full traceback
-            error_str = str(run.error)
-            error_message = error_str.split("\n")[0] if "\n" in error_str else error_str
+        try:
+            # Clean up error message if present
+            error_message = None
+            if hasattr(run, "error") and run.error:
+                # Extract just the main error message without the full traceback
+                error_str = str(run.error)
+                error_message = error_str.split("\n")[0] if "\n" in error_str else error_str
 
-        # Extract token usage if available
-        token_usage = {}
-        if hasattr(run, "execution_metadata") and run.execution_metadata:
-            token_usage = self.serialize_run_data(
-                run.execution_metadata.get("token_usage", {})
-            )
+            # Extract token usage if available
+            token_usage = {}
+            if hasattr(run, "execution_metadata") and run.execution_metadata:
+                token_usage = run.execution_metadata.get("token_usage", {})
 
-        # Get feedback if available
-        feedback_list = []
-        if hasattr(run, "feedback_list"):
-            feedback_list = [
-                {
-                    "key": fb.key,
-                    "value": fb.value,
-                    "comment": fb.comment,
-                    "timestamp": str(fb.timestamp),
-                }
-                for fb in run.feedback_list
-            ]
+            # Get feedback if available
+            feedback_list = []
+            if hasattr(run, "feedback_list"):
+                feedback_list = [
+                    {
+                        "key": fb.key,
+                        "value": fb.value,
+                        "comment": fb.comment,
+                        "timestamp": str(fb.timestamp),
+                    }
+                    for fb in run.feedback_list
+                ]
 
-        # Serialize all run data
-        run_data = {
-            "runId": str(run.id),
-            "name": getattr(run, "name", None),
-            "startTime": str(run.start_time),
-            "endTime": str(run.end_time),
-            "status": run.status,
-            "inputs": self.serialize_run_data(run.inputs),
-            "outputs": self.serialize_run_data(run.outputs),
-            "error": error_message,  # Using cleaned error message
-            "runtime": getattr(run, "runtime_seconds", None),
-            "parentRunId": (
-                str(run.parent_run_id) if getattr(run, "parent_run_id", None) else None
-            ),
-            "childRunIds": [str(id) for id in getattr(run, "child_run_ids", [])],
-            "tags": getattr(run, "tags", []),
-            "feedback": feedback_list,
-            "metrics": {
-                "tokenUsage": {
-                    "promptTokens": token_usage.get("prompt_tokens"),
-                    "completionTokens": token_usage.get("completion_tokens"),
-                    "totalTokens": token_usage.get("total_tokens"),
+            # Serialize all run data
+            run_data = {
+                "runId": str(run.id),
+                "name": getattr(run, "name", None),
+                "startTime": str(run.start_time),
+                "endTime": str(run.end_time),
+                "status": run.status,
+                "inputs": run.inputs,
+                "outputs": run.outputs,
+                "error": error_message,
+                "runtime": getattr(run, "runtime_seconds", None),
+                "parentRunId": (
+                    str(run.parent_run_id) if getattr(run, "parent_run_id", None) else None
+                ),
+                "childRunIds": [str(id) for id in getattr(run, "child_run_ids", [])],
+                "tags": getattr(run, "tags", []),
+                "feedback": feedback_list,
+                "metrics": {
+                    "tokenUsage": {
+                        "promptTokens": token_usage.get("prompt_tokens"),
+                        "completionTokens": token_usage.get("completion_tokens"),
+                        "totalTokens": token_usage.get("total_tokens"),
+                    },
+                    "latency": getattr(run, "latency", None),
+                    "cost": getattr(run, "cost", None),
                 },
-                "latency": getattr(run, "latency", None),
-                "cost": getattr(run, "cost", None),
-            },
-            "trace": {
-                "projectName": getattr(run, "project_name", None),
-                "sessionName": getattr(run, "session_name", None),
-                "executionOrder": getattr(run, "execution_order", None),
-            },
-        }
-
-        mce_dict = {
-            "proposedSnapshot": {
-                "urn": run_urn,
-                "aspects": [{"llmRunProperties": run_data}],
+                "trace": {
+                    "projectName": getattr(run, "project_name", None),
+                    "sessionName": getattr(run, "session_name", None),
+                    "executionOrder": getattr(run, "execution_order", None),
+                },
             }
-        }
-        return self.emit_metadata(mce_dict)
+
+            mce_dict = {
+                "proposedSnapshot": {
+                    "urn": run_urn,
+                    "aspects": [{"llmRunProperties": run_data}],
+                }
+            }
+
+            self.emit_metadata(mce_dict)
+            return run_urn
+        except Exception as e:
+            print(f"Error processing run {run.id}: {str(e)}")
+            return None
 
     def ingest_recent_runs(self, limit=100, days_ago=7):
         """Ingest metadata from recent LangSmith runs"""

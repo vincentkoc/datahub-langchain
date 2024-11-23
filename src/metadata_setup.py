@@ -16,7 +16,7 @@ class DryRunEmitter:
     """Emitter that prints metadata changes instead of sending them to DataHub"""
 
     def __init__(self):
-        self.emitted_mces = []
+        self._emitted_mces = []
 
     def emit(self, mce: Union[dict, MetadataChangeEventClass]) -> None:
         """Print the metadata change event instead of emitting it"""
@@ -26,7 +26,7 @@ class DryRunEmitter:
             else:
                 mce_dict = mce.to_obj()
 
-            self.emitted_mces.append(mce_dict)
+            self._emitted_mces.append(mce_dict)
             print("\n=== Metadata Change Event ===")
 
             # Handle both dictionary formats
@@ -46,6 +46,10 @@ class DryRunEmitter:
             print(f"Error in dry run emission: {str(e)}")
             print("Metadata content:")
             print(json.dumps(mce_dict, indent=2))
+
+    def get_emitted_mces(self) -> list:
+        """Return all emitted MCEs"""
+        return self._emitted_mces.copy()
 
 
 class DataHubEmitter(DatahubRestEmitter):
@@ -132,26 +136,25 @@ class MetadataSetup:
             )
 
             # Create properties aspect
-            properties = DatasetPropertiesClass(
-                name=type_def["entityType"],
-                description=f"Custom type for {type_def['entityType']}",
-                customProperties={
-                    "aspectSpecs": json.dumps(type_def["aspectSpecs"])
+            properties = {
+                "DatasetProperties": {
+                    "name": type_def["entityType"],
+                    "description": f"Custom type for {type_def['entityType']}",
+                    "customProperties": {
+                        "aspectSpecs": json.dumps(type_def["aspectSpecs"])
+                    }
                 }
-            )
+            }
 
-            # Create snapshot with properties
-            snapshot = DatasetSnapshotClass(
-                urn=type_urn,
-                aspects=[properties]
-            )
+            # Create MCE dict directly
+            mce_dict = {
+                "proposedSnapshot": {
+                    "urn": type_urn,
+                    "aspects": [properties]
+                }
+            }
 
-            # Create and emit MCE
-            mce = MetadataChangeEventClass(
-                proposedSnapshot=snapshot
-            )
-
-            self.emitter.emit(mce)
+            self.emitter.emit(mce_dict)
             print(f"Successfully registered type from {file_path.name}")
             return True
         except Exception as e:

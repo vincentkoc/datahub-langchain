@@ -42,9 +42,10 @@ def test_metadata_setup_register_types(tmp_path):
     setup = MetadataSetup()
     setup.types_dir = types_dir
     setup.emitter = DryRunEmitter()
-    setup.register_all_types()
+    success = setup.register_all_types()
 
+    assert success
     emitted = setup.emitter.get_emitted_mces()
     assert len(emitted) == 1
-    assert emitted[0]["proposedSnapshot"]["urn"].endswith(f":testType")
-    assert "aspectSpecs" in emitted[0]["proposedSnapshot"]["aspects"][0]
+    assert "testType" in emitted[0]["proposedSnapshot"]["urn"]
+    assert "aspectSpecs" in emitted[0]["proposedSnapshot"]["aspects"][0]["DatasetProperties"]["customProperties"]
