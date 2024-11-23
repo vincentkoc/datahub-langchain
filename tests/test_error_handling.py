@@ -66,6 +66,8 @@ def test_datahub_emission_error(mock_datahub_error, mock_llm):
     class ErrorEmitter:
         def emit(self, _):
             raise mock_datahub_error
+        def test_connection(self):
+            pass  # Don't raise error during connection test
 
     emitter.emitter = ErrorEmitter()
 
