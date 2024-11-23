@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from langchain_openai import OpenAI
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
@@ -28,6 +28,15 @@ def mock_chain():
     chain.max_retries = 2
     chain.callbacks = []
     return chain
+
+def test_dry_run_mode(mock_llm, monkeypatch):
+    """Test emitter behavior in dry run mode"""
+    monkeypatch.setenv("DATAHUB_DRY_RUN", "true")
+    emitter = LangChainMetadataEmitter()
+
+    urn = emitter.emit_model_metadata(mock_llm)
+    assert urn == f"urn:li:llmModel:{mock_llm.model_name}"
+    assert emitter.is_dry_run == True
 
 def test_emit_model_metadata(mock_llm):
     emitter = LangChainMetadataEmitter()
@@ -66,3 +75,16 @@ def test_emit_chain_metadata(mock_chain, mock_llm, mock_prompt):
     chain_props = emitted[0]["proposedSnapshot"]["aspects"][0]["llmChainProperties"]
     assert chain_props["chainType"] == "LLMChain"
     assert chain_props["components"] == [model_urn, prompt_urn]
+
+@pytest.mark.integration
+def test_run_example_with_dry_run(monkeypatch):
+    """Test the full example run in dry run mode"""
+    monkeypatch.setenv("DATAHUB_DRY_RUN", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    with patch('langchain_openai.OpenAI') as mock_openai:
+        mock_openai.return_value.run.return_value = "Paris"
+        from src.langchain_example import run_example
+
+        # Should not raise any exceptions in dry run mode
+        run_example()
