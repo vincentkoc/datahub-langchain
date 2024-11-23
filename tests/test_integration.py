@@ -22,7 +22,7 @@ def test_full_integration_flow():
     with patch('langchain_openai.OpenAI') as mock_openai:
         mock_openai.return_value.run.return_value = "Paris"
 
-        llm = OpenAI(model_name="text-davinci-003")
+        llm = OpenAI(model_name="gpt-4o-mini")
         prompt = PromptTemplate(
             input_variables=["question"],
             template="Answer: {question}"

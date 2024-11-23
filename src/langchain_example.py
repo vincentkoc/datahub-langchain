@@ -168,7 +168,7 @@ def run_example():
         print("\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub")
 
     # Initialize LangChain components
-    llm = OpenAI(model_name='text-davinci-003')
+    llm = OpenAI(model_name='gpt-4o-mini')
     prompt = PromptTemplate(
         input_variables=['question'],
         template="Answer the following question:\n\n{question}"
