@@ -1,0 +1,10 @@
+pytest
+pytest-cov
+black
+flake8
+isort
+pytest-mock
+responses
+
+# docker image to run local datahub
+acryl-datahub
