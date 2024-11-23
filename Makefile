@@ -12,10 +12,11 @@ install: venv
 	$(BIN)/pip install -r requirements.txt
 
 dev: install
-	$(BIN)/pip install -r requirements-dev.txt
+#	$(BIN)/pip install -r requirements-dev.txt
+	$(BIN)/pip install -e .
 
 test: dev
-#	$(BIN)/pytest tests/ -v --cov=src --cov-report=term-missing
+	PYTHONPATH=. $(BIN)/pytest tests/ -v --cov=src --cov-report=term-missing
 
 lint: dev
 	$(BIN)/flake8 src/ tests/
