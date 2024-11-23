@@ -105,6 +105,9 @@ services:
     - UI_INGESTION_ENABLED=true
     - TOKENS_ENABLED=true
     - DATAHUB_GMS_TOKEN=${DATAHUB_TOKEN:-}
+    - DATAHUB_SYSTEM_UPDATE_BROWSE_PATHS=true
+    - DATAHUB_SYSTEM_UPDATE_SEARCH_INDEX=true
+    - DATAHUB_SYSTEM_ENABLE_RELATIONSHIPS=true
     healthcheck:
       interval: 1s
       retries: 3
@@ -157,10 +160,13 @@ services:
         limits:
           memory: 2G
     environment:
-    - discovery.type=single-node
-    - ${XPACK_SECURITY_ENABLED:-xpack.security.enabled=false}
-    - ES_JAVA_OPTS=-Xms512m -Xmx1g -Dlog4j2.formatMsgNoLookups=true
-    - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx1g -Dlog4j2.formatMsgNoLookups=true
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "cluster.routing.allocation.disk.threshold_enabled=false"
+      - "cluster.routing.allocation.disk.watermark.low=5gb"
+      - "cluster.routing.allocation.disk.watermark.high=4gb"
+      - "cluster.routing.allocation.disk.watermark.flood_stage=3gb"
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     healthcheck:
       interval: 1s
       retries: 3

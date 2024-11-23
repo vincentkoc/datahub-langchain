@@ -306,16 +306,27 @@ class MetadataSetup:
             status = StatusClass(removed=False)
             print("Status aspect created")
 
-            # Create Properties aspect with debug output
+            # Create Properties aspect with enhanced metadata
             schema_json = json.dumps(type_def["aspectSpecs"], indent=2)
-            print(f"\nSchema definition:\n{schema_json}")
+
+            # Add browse paths if defined
+            browse_paths = type_def.get("browsePaths", [])
+
+            # Add relationships if defined
+            relationships = type_def.get("relationships", [])
+
+            # Add searchable fields if defined
+            searchable_fields = type_def.get("searchableFields", [])
 
             properties = DatasetPropertiesClass(
                 description=f"Custom type for {type_def['entityType']}",
                 name=type_def["entityType"],
                 customProperties={
                     "entityType": type_def["entityType"],
-                    "schema": schema_json
+                    "schema": schema_json,
+                    "browsePaths": json.dumps(browse_paths),
+                    "relationships": json.dumps(relationships),
+                    "searchableFields": json.dumps(searchable_fields)
                 }
             )
             print("Properties aspect created")

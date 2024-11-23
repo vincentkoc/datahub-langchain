@@ -67,5 +67,34 @@
         "required": ["runId", "startTime", "status"]
       }
     }
+  ],
+  "browsePaths": [
+    "/llm/runs",
+    "/llm/runs/${runId}"
+  ],
+  "relationships": [
+    {
+      "name": "RunsOn",
+      "entityTypes": ["llmModel"]
+    },
+    {
+      "name": "Uses",
+      "entityTypes": ["llmPrompt"]
+    },
+    {
+      "name": "PartOf",
+      "entityTypes": ["llmChain"]
+    }
+  ],
+  "searchableFields": [
+    {
+      "fieldPath": "runId",
+      "fieldType": "TEXT_PARTIAL",
+      "enableAutocomplete": true
+    },
+    {
+      "fieldPath": "status",
+      "fieldType": "KEYWORD"
+    }
   ]
 }

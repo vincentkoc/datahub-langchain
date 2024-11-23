@@ -99,10 +99,12 @@ class LangSmithIngestion:
                 error_str = str(run.error)
                 error_message = error_str.split("\n")[0] if "\n" in error_str else error_str
 
-            # Extract token usage if available
+            # Extract token usage and model name safely
             token_usage = {}
+            model_name = "unknown"
             if hasattr(run, "execution_metadata") and run.execution_metadata:
                 token_usage = run.execution_metadata.get("token_usage", {})
+                model_name = run.execution_metadata.get("model_name", "unknown")
 
             # Create dataset URN
             run_urn = make_dataset_urn(
@@ -114,19 +116,33 @@ class LangSmithIngestion:
             # Create Status aspect
             status = StatusClass(removed=False)
 
+            # Add browse paths
+            browse_paths = [
+                "/llm/runs",
+                f"/llm/runs/{run.id}",
+                f"/llm/models/{model_name}/runs"
+            ]
+
+            # Add relationships
+            relationships = []
+            if hasattr(run, "model_id") and run.model_id:
+                relationships.append({
+                    "type": "RunsOn",
+                    "target": f"urn:li:dataset:(urn:li:dataPlatform:datahub,llmModel,{run.model_id})"
+                })
+
             # Create Properties aspect with only string values
-            # Note: All values must be strings for DataHub's schema validation
             custom_properties = {
                 "runId": str(run.id),
                 "name": str(getattr(run, "name", "")),
-                "startTime": str(run.start_time),
-                "endTime": str(run.end_time),
-                "status": str(run.status),
-                "inputs": json.dumps(dict(run.inputs)),
-                "outputs": json.dumps(dict(run.outputs)) if run.outputs else "",
+                "startTime": str(getattr(run, "start_time", "")),
+                "endTime": str(getattr(run, "end_time", "")),
+                "status": str(getattr(run, "status", "unknown")),
+                "inputs": json.dumps(dict(getattr(run, "inputs", {}))),
+                "outputs": json.dumps(dict(getattr(run, "outputs", {}))) if getattr(run, "outputs", None) else "",
                 "error": error_message if error_message else "",
                 "runtime": str(float(getattr(run, "runtime_seconds", 0))),
-                "parentRunId": str(run.parent_run_id) if getattr(run, "parent_run_id", None) else "",
+                "parentRunId": str(getattr(run, "parent_run_id", "")) if getattr(run, "parent_run_id", None) else "",
                 "childRunIds": json.dumps([str(id) for id in getattr(run, "child_run_ids", [])]),
                 "tags": json.dumps(list(getattr(run, "tags", []))),
                 "feedback": json.dumps([]),
@@ -137,6 +153,9 @@ class LangSmithIngestion:
                 }),
                 "latency": str(float(getattr(run, "latency", 0))),
                 "cost": str(float(getattr(run, "cost", 0))),
+                "browsePaths": json.dumps(browse_paths),
+                "relationships": json.dumps(relationships),
+                "modelName": model_name
             }
 
             properties = DatasetPropertiesClass(
@@ -166,6 +185,85 @@ class LangSmithIngestion:
                 raise  # Re-raise exception in live mode
             return None
 
+    def verify_run_metadata(self, run_urn):
+        """Verify that run metadata was properly written to DataHub"""
+        try:
+            # Get server URL from environment
+            server_url = os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+
+            # Create GraphQL query with proper subselection
+            query = """
+            query getDataset($urn: String!) {
+                dataset(urn: $urn) {
+                    urn
+                    properties {
+                        description
+                        customProperties {
+                            key
+                            value
+                        }
+                    }
+                }
+            }
+            """
+
+            # Make GraphQL request
+            response = self.emitter._session.post(
+                f"{server_url}/api/graphql",
+                json={
+                    "query": query,
+                    "variables": {
+                        "urn": run_urn
+                    }
+                }
+            )
+
+            print(f"\nVerifying run metadata for URN: {run_urn}")
+            print(f"Response status: {response.status_code}")
+
+            if response.status_code == 200:
+                data = response.json()
+                if data and data.get('data', {}).get('dataset'):
+                    print("✓ Run metadata found")
+                    dataset = data['data']['dataset']
+                    properties = dataset.get('properties', {})
+
+                    # Pretty print custom properties
+                    custom_props = {}
+                    for prop in properties.get('customProperties', []):
+                        key = prop.get('key')
+                        value = prop.get('value')
+                        if key and value:
+                            custom_props[key] = value
+
+                    if custom_props:
+                        print("\nRun Properties:")
+                        for key, value in custom_props.items():
+                            if key in ['inputs', 'outputs', 'tokenUsage', 'browsePaths', 'relationships']:
+                                try:
+                                    parsed = json.loads(value)
+                                    print(f"  {key}: {json.dumps(parsed, indent=2)}")
+                                except:
+                                    print(f"  {key}: {value}")
+                            else:
+                                print(f"  {key}: {value}")
+                    return True
+                else:
+                    print(f"✗ Run metadata not found for URN: {run_urn}")
+                    return False
+            else:
+                print(f"✗ Error verifying run metadata")
+                print(f"  Status code: {response.status_code}")
+                print(f"  Response: {response.text[:500]}")
+                return False
+
+        except Exception as e:
+            print(f"✗ Error during verification: {str(e)}")
+            print(f"  Full error: {repr(e)}")
+            if not self.is_dry_run:
+                raise
+            return False
+
     def ingest_recent_runs(self, limit=100, days_ago=7):
         """Ingest metadata from recent LangSmith runs"""
         # Get runs from the last X days
@@ -190,6 +288,11 @@ class LangSmithIngestion:
                             print(f"DRY RUN: Successfully processed run: {run.id}")
                         else:
                             print(f"Ingested run: {run.id}")
+                            # Verify the metadata was written
+                            if self.verify_run_metadata(run_urn):
+                                print(f"✓ Verified metadata for run: {run.id}")
+                            else:
+                                print(f"✗ Failed to verify metadata for run: {run.id}")
                             # Add delay between metadata pushes
                             time.sleep(METADATA_PUSH_DELAY)
                 except Exception as e:
