@@ -55,21 +55,30 @@ class DryRunEmitter:
 class DataHubEmitter(DatahubRestEmitter):
     """Extended DataHub emitter with better error handling"""
 
+    def __init__(self, gms_server: str = None, token: str = None):
+        super().__init__(gms_server=gms_server, token=token)
+        # Add auth header to session
+        if token:
+            self._session.headers.update({"Authorization": f"Bearer {token}"})
+
     def emit(self, mce: Union[dict, MetadataChangeEventClass]) -> None:
         """Emit metadata with proper error handling"""
         try:
             # Test connection first
             self.test_connection()
 
-            # Convert dict to MCE if needed
+            # Convert all URNs to dataset URNs
             if isinstance(mce, dict):
-                snapshot = DatasetSnapshotClass(
-                    urn=mce["proposedSnapshot"]["urn"],
-                    aspects=mce["proposedSnapshot"]["aspects"]
-                )
-                mce = MetadataChangeEventClass(
-                    proposedSnapshot=snapshot
-                )
+                urn = mce["proposedSnapshot"]["urn"]
+                if not urn.startswith("urn:li:dataset:"):
+                    # Convert custom URN to dataset URN
+                    entity_type = urn.split(":")[2]
+                    name = urn.split(":")[3]
+                    mce["proposedSnapshot"]["urn"] = make_dataset_urn(
+                        platform=entity_type,
+                        name=name,
+                        env="PROD"
+                    )
 
             # Emit the MCE
             super().emit(mce)
@@ -89,11 +98,22 @@ def get_datahub_emitter(
         )
         return DryRunEmitter()
 
-    gms_server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+    # Get server and token from environment
+    gms_server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:9002/api/gms")
     token = os.getenv("DATAHUB_TOKEN")
 
+    if not token and not is_dry_run:
+        print("\nWarning: DATAHUB_TOKEN not set. Authentication may fail.")
+
     try:
+        # Create emitter with token
         emitter = DataHubEmitter(gms_server=gms_server, token=token)
+
+        # Add auth header explicitly
+        if token:
+            emitter._session.headers.update({"Authorization": f"Bearer {token}"})
+
+        # Test connection
         emitter.test_connection()
         return emitter
     except Exception as e:
@@ -128,10 +148,10 @@ class MetadataSetup:
             with open(file_path) as f:
                 type_def = json.load(f)
 
-            # Create URN for the type using dataset URN format
+            # Create dataset URN for type registration
             type_urn = make_dataset_urn(
                 platform="datahub",
-                name=f"entityType_{type_def['entityType']}",
+                name=type_def['entityType'],
                 env="PROD"
             )
 
@@ -140,9 +160,7 @@ class MetadataSetup:
                 "DatasetProperties": {
                     "name": type_def["entityType"],
                     "description": f"Custom type for {type_def['entityType']}",
-                    "customProperties": {
-                        "aspectSpecs": json.dumps(type_def["aspectSpecs"])
-                    }
+                    "customProperties": type_def
                 }
             }
 
