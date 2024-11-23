@@ -155,12 +155,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 1G
     environment:
     - discovery.type=single-node
     - ${XPACK_SECURITY_ENABLED:-xpack.security.enabled=false}
-    - ES_JAVA_OPTS=-Xms512m -Xmx1g -Dlog4j2.formatMsgNoLookups=true
-    - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx1g -Dlog4j2.formatMsgNoLookups=true
+    - ES_JAVA_OPTS=-Xms256m -Xmx512m -Dlog4j2.formatMsgNoLookups=true
+    - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m -Dlog4j2.formatMsgNoLookups=true
     healthcheck:
       interval: 1s
       retries: 3
@@ -173,13 +173,6 @@ services:
     - ${DATAHUB_MAPPED_ELASTIC_PORT:-9200}:9200
     volumes:
     - esdata:/usr/share/elasticsearch/data
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-      nofile:
-        soft: 65536
-        hard: 65536
   elasticsearch-setup:
     depends_on:
       elasticsearch:
