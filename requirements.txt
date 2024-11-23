@@ -1,0 +1,8 @@
+acryl-datahub[datahub-rest]
+langchain
+openai
+langsmith
+python-dotenv
+
+# development
+acryl-datahub
