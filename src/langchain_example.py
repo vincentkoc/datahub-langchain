@@ -58,16 +58,21 @@ class LangChainMetadataEmitter:
 
     def emit_prompt_metadata(self, prompt):
         """Emit metadata for a prompt template"""
-        prompt_id = hash(str(prompt.messages))
-        prompt_urn = f"urn:li:llmPrompt:{prompt_id}"
-
+        # Properly extract message templates
         formatted_messages = []
         for message in prompt.messages:
-            role, content = message
+            # Each message is a BaseMessagePromptTemplate
+            # The type is determined by the class name
+            message_type = message.__class__.__name__.lower().replace('messageprompttemplate', '')
             formatted_messages.append({
-                "role": role,
-                "content": content
+                "role": message_type,  # Will be 'system', 'human', etc.
+                "content": message.prompt.template if hasattr(message.prompt, 'template') else str(message.prompt)
             })
+
+        # Create a stable string for hashing
+        prompt_str = json.dumps(formatted_messages, sort_keys=True)
+        prompt_id = hash(prompt_str)
+        prompt_urn = f"urn:li:llmPrompt:{prompt_id}"
 
         mce_dict = {
             "proposedSnapshot": {
@@ -75,14 +80,21 @@ class LangChainMetadataEmitter:
                 "aspects": [{
                     "llmPromptProperties": {
                         "template": json.dumps(formatted_messages, indent=2),
-                        "inputVariables": prompt.input_variables,
+                        "inputVariables": list(prompt.input_variables),
                         "templateFormat": "chat",
                         "category": "System",
                         "metadata": {
                             "description": "Chat prompt with system and human messages",
                             "createdAt": datetime.now().isoformat(),
+                            "usage": {
+                                "totalCalls": 0,
+                                "successRate": 0.0,
+                                "averageTokens": 0
+                            }
                         },
-                        "version": "1.0"
+                        "version": "1.0",
+                        "tags": ["chat", "system-prompt"],
+                        "examples": []
                     }
                 }]
             }
