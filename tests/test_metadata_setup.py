@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pytest
 
@@ -38,10 +39,11 @@ def test_metadata_setup_register_types(tmp_path):
     with open(types_dir / "test_type.json", "w") as f:
         json.dump(test_type, f)
 
-    # Initialize MetadataSetup with DryRunEmitter
     setup = MetadataSetup()
     setup.types_dir = types_dir
+    setup.emitter = DryRunEmitter()
     setup.register_all_types()
 
-    # Verify the type was registered
-    assert len(setup.emitter.get_emitted_mces()) == 1
+    emitted = setup.emitter.get_emitted_mces()
+    assert len(emitted) == 1
+    assert emitted[0]["proposedSnapshot"]["entityType"] == "testType"

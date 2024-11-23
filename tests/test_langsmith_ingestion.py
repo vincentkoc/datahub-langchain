@@ -16,6 +16,13 @@ def mock_run():
     run.status = "completed"
     run.inputs = {"test": "input"}
     run.outputs = {"test": "output"}
+    run.execution_metadata = {"token_usage": {"prompt_tokens": 10, "completion_tokens": 20}}
+    run.feedback_list = []
+    run.error = None
+    run.runtime_seconds = 1.0
+    run.parent_run_id = None
+    run.child_run_ids = []
+    run.tags = []
     return run
 
 

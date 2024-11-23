@@ -2,6 +2,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from langchain.prompts import ChatPromptTemplate
+from langchain.schema.messages import SystemMessage, HumanMessage
 from langchain.schema.runnable import RunnableSequence
 from langchain_openai import ChatOpenAI
 
@@ -20,10 +21,15 @@ def mock_llm():
 @pytest.fixture
 def mock_prompt():
     prompt = Mock(spec=ChatPromptTemplate)
-    prompt.messages = [
-        ("system", "You are a helpful assistant."),
-        ("human", "{question}"),
-    ]
+    system_message = Mock(spec=SystemMessage)
+    system_message.prompt.template = "You are a helpful assistant."
+    system_message.__class__.__name__ = "SystemMessagePromptTemplate"
+
+    human_message = Mock(spec=HumanMessage)
+    human_message.prompt.template = "{question}"
+    human_message.__class__.__name__ = "HumanMessagePromptTemplate"
+
+    prompt.messages = [system_message, human_message]
     prompt.input_variables = ["question"]
     return prompt
 
