@@ -5,8 +5,11 @@ from uuid import UUID
 
 from dotenv import load_dotenv
 from langsmith import Client
+from datahub.emitter.mce_builder import make_dataset_urn
+from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
+from datahub.metadata.schema_classes import DatasetSnapshotClass
 
-from src.metadata_setup import get_datahub_emitter, make_dataset_urn, DryRunEmitter
+from src.metadata_setup import get_datahub_emitter, DryRunEmitter
 
 load_dotenv()
 
@@ -25,6 +28,10 @@ class LangSmithIngestion:
         # Default to GMS endpoint if not specified
         if not gms_server:
             gms_server = os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+            # If using frontend, append /api/gms
+            if ":9002" in gms_server:
+                gms_server = f"{gms_server}/api/gms"
+            print(f"\nDEBUG: Using GMS endpoint: {gms_server}")
 
         self.emitter = get_datahub_emitter(gms_server)
         self.client = Client()
@@ -38,11 +45,39 @@ class LangSmithIngestion:
     def emit_metadata(self, mce_dict: dict) -> str:
         """Emit metadata with dry run handling"""
         try:
-            # Let the emitter handle dry run mode
-            self.emitter.emit(mce_dict)
+            if self.is_dry_run:
+                print(f"\nDEBUG: Would emit metadata:")
+                print(json.dumps(mce_dict, indent=2))
+                self.emitter.emit(mce_dict)
+                return mce_dict["proposedSnapshot"]["urn"]
+
+            # For live mode, convert to MetadataChangeEvent
+            mce = MetadataChangeEvent(
+                proposedSnapshot=DatasetSnapshotClass(
+                    urn=mce_dict["proposedSnapshot"]["urn"],
+                    aspects=[
+                        {
+                            "com.linkedin.common.Status": {
+                                "removed": False
+                            }
+                        },
+                        {
+                            "com.linkedin.common.DatasetProperties": {
+                                "description": mce_dict["proposedSnapshot"]["aspects"][1]["com.linkedin.common.DatasetProperties"]["description"],
+                                "customProperties": mce_dict["proposedSnapshot"]["aspects"][1]["com.linkedin.common.DatasetProperties"]["customProperties"],
+                                "name": mce_dict["proposedSnapshot"]["aspects"][1]["com.linkedin.common.DatasetProperties"]["name"]
+                            }
+                        }
+                    ]
+                )
+            )
+            self.emitter.emit(mce)
             return mce_dict["proposedSnapshot"]["urn"]
         except Exception as e:
             error_msg = f"Failed to emit metadata: {str(e)}"
+            print(f"\nDEBUG: Error details: {error_msg}")
+            print(f"DEBUG: Current metadata structure:")
+            print(json.dumps(mce_dict, indent=2))
             if self.is_dry_run:
                 print(f"DRY RUN ERROR: {error_msg}")
             else:
@@ -52,6 +87,8 @@ class LangSmithIngestion:
     def emit_run_metadata(self, run):
         """Emit metadata for a single LangSmith run"""
         try:
+            print(f"\nDEBUG: Processing run {run.id}")
+
             # Clean up error message if present
             error_message = None
             if hasattr(run, "error") and run.error:
@@ -96,23 +133,37 @@ class LangSmithIngestion:
                 env="PROD"
             )
 
-            mce_dict = {
+            # Create metadata with proper structure
+            metadata = {
                 "proposedSnapshot": {
                     "urn": run_urn,
                     "aspects": [
                         {
-                            "DatasetProperties": {
-                                "name": str(run.id),
-                                "description": "LangSmith Run",
-                                "customProperties": run_data
+                            "com.linkedin.common.Status": {
+                                "removed": False
+                            }
+                        },
+                        {
+                            "com.linkedin.common.DatasetProperties": {
+                                "description": f"LangSmith Run {run.id}",
+                                "customProperties": run_data,
+                                "name": str(run.id)
                             }
                         }
-                    ],
+                    ]
+                },
+                "systemMetadata": {
+                    "lastObserved": int(datetime.now().timestamp() * 1000),
+                    "runId": "langsmith-ingestion"
                 }
             }
 
-            return self.emit_metadata(mce_dict)
+            print(f"\nDEBUG: Emitting metadata:")
+            print(json.dumps(metadata, indent=2))
+
+            return self.emit_metadata(metadata)
         except Exception as e:
+            print(f"\nDEBUG: Error in emit_run_metadata: {str(e)}")
             print(f"Error processing run {run.id}: {str(e)}")
             return None
 
