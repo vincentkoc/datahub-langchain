@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Union
+import urllib.parse
 
 from dotenv import load_dotenv, find_dotenv
 from datahub.emitter.mce_builder import make_dataset_urn
@@ -170,12 +171,78 @@ class MetadataSetup:
         self.emitter = get_datahub_emitter(gms_server)
         self.types_dir = Path(__file__).parent.parent / "metadata" / "types"
 
-    def register_all_types(self):
-        """Register all custom types defined in metadata/types directory"""
+    def verify_types(self):
+        """Verify that types are registered in DataHub"""
+        print("\n=== Verifying Type Registration ===")
+
+        # List of types we expect to find
+        expected_types = ["llmChain", "llmModel", "llmPrompt", "llmRun"]
+
+        # Get server URL from environment
+        server_url = os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+        print(f"Using server URL: {server_url}")
+
+        for type_name in expected_types:
+            try:
+                # Create dataset URN
+                type_urn = make_dataset_urn(
+                    platform="datahub",
+                    name=type_name,
+                    env="PROD"
+                )
+
+                # Use DataHub's dataset endpoint
+                encoded_urn = urllib.parse.quote(type_urn)
+                response = self.emitter._session.get(
+                    f"{server_url}/datasets/{encoded_urn}?aspects=datasetProperties"
+                )
+
+                if response.status_code == 200:
+                    print(f"✓ Found type: {type_name}")
+                    data = response.json()
+                    if 'aspects' in data:
+                        properties = data['aspects'].get('datasetProperties', {})
+                        print(f"  Description: {properties.get('description', 'N/A')}")
+
+                        # Pretty print custom properties
+                        custom_props = properties.get('customProperties', {})
+                        if custom_props:
+                            print("  Custom Properties:")
+                            for key, value in custom_props.items():
+                                if key == 'schema':
+                                    try:
+                                        schema = json.loads(value)
+                                        print(f"    schema: {json.dumps(schema, indent=4)}")
+                                    except:
+                                        print(f"    schema: {value}")
+                                else:
+                                    print(f"    {key}: {value}")
+                    else:
+                        print(f"✗ Type found but no properties: {type_name}")
+                else:
+                    print(f"✗ Type not found: {type_name}")
+                    print(f"  Status code: {response.status_code}")
+                    print(f"  Response: {response.text}")
+
+            except Exception as e:
+                print(f"✗ Error verifying type {type_name}: {str(e)}")
+                print(f"  Full error: {repr(e)}")
+                if not isinstance(self.emitter, DryRunEmitter):
+                    raise
+
+    def register_all_types(self) -> bool:
+        """Register all types from JSON files"""
         success = True
         for type_file in self.types_dir.glob("*.json"):
             if not self.register_type_from_file(type_file):
                 success = False
+
+        if success:
+            print("\nAll types registered successfully")
+            self.verify_types()
+        else:
+            print("\nSome types failed to register")
+
         return success
 
     def register_type_from_file(self, file_path) -> bool:
@@ -184,25 +251,33 @@ class MetadataSetup:
             with open(file_path) as f:
                 type_def = json.load(f)
 
+            print(f"\n=== Registering Type: {type_def['entityType']} ===")
+
             # Create dataset URN for type registration
             type_urn = make_dataset_urn(
                 platform="datahub",
                 name=type_def['entityType'],
                 env="PROD"
             )
+            print(f"URN: {type_urn}")
 
             # Create Status aspect
             status = StatusClass(removed=False)
+            print("Status aspect created")
 
-            # Create Properties aspect
+            # Create Properties aspect with debug output
+            schema_json = json.dumps(type_def["aspectSpecs"], indent=2)
+            print(f"\nSchema definition:\n{schema_json}")
+
             properties = DatasetPropertiesClass(
                 description=f"Custom type for {type_def['entityType']}",
                 name=type_def["entityType"],
                 customProperties={
                     "entityType": type_def["entityType"],
-                    "schema": json.dumps(type_def["aspectSpecs"])
+                    "schema": schema_json
                 }
             )
+            print("Properties aspect created")
 
             # Create DatasetSnapshot
             snapshot = DatasetSnapshotClass(
@@ -215,15 +290,12 @@ class MetadataSetup:
                 proposedSnapshot=snapshot
             )
 
-            print(f"\nRegistering type {type_def['entityType']}...")
-            print(f"URN: {type_urn}")
-
-            # Emit the metadata
+            print("\nEmitting metadata to DataHub...")
             self.emitter.emit(mce)
-            print(f"Successfully registered type from {file_path.name}")
+            print(f"✓ Successfully registered type: {type_def['entityType']}")
             return True
         except Exception as e:
-            print(f"Error registering type from {file_path.name}: {str(e)}")
+            print(f"✗ Error registering type from {file_path.name}: {str(e)}")
             if not isinstance(self.emitter, DryRunEmitter):
                 raise
             return False
@@ -231,5 +303,8 @@ class MetadataSetup:
 
 if __name__ == "__main__":
     setup = MetadataSetup()
-    if not setup.register_all_types():
-        print("\nWarning: Some types failed to register. Check the logs above for details.")
+    if setup.register_all_types():
+        print("\nType registration complete")
+    else:
+        print("\nType registration failed")
+        exit(1)
