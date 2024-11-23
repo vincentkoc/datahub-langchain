@@ -1,14 +1,17 @@
-import os
-from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema.runnable import RunnableSequence
-from metadata_setup import get_datahub_emitter
-from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
 import json
+import os
 from datetime import datetime
 
+from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
+from dotenv import load_dotenv
+from langchain.prompts import ChatPromptTemplate
+from langchain.schema.runnable import RunnableSequence
+from langchain_openai import ChatOpenAI
+
+from metadata_setup import get_datahub_emitter
+
 load_dotenv()
+
 
 class LangChainMetadataEmitter:
     def __init__(self, gms_server: str = None):
@@ -19,9 +22,11 @@ class LangChainMetadataEmitter:
         """Emit metadata with dry run handling"""
         try:
             if self.is_dry_run:
-                print(f"\nDRY RUN: Would emit metadata for {mce_dict['proposedSnapshot']['urn']}")
+                print(
+                    f"\nDRY RUN: Would emit metadata for {mce_dict['proposedSnapshot']['urn']}"
+                )
             self.emitter.emit(mce_dict)
-            return mce_dict['proposedSnapshot']['urn']
+            return mce_dict["proposedSnapshot"]["urn"]
         except Exception as e:
             error_msg = f"Failed to emit metadata: {str(e)}"
             if self.is_dry_run:
@@ -37,21 +42,23 @@ class LangChainMetadataEmitter:
         mce_dict = {
             "proposedSnapshot": {
                 "urn": model_urn,
-                "aspects": [{
-                    "llmModelProperties": {
-                        "modelName": model.model_name,
-                        "provider": "OpenAI",
-                        "parameters": model.model_kwargs,
-                        "modelFamily": "GPT",
-                        "modelType": "chat",
-                        "capabilities": ["chat", "text-generation"],
-                        "metrics": {
-                            "averageLatency": None,
-                            "tokenThroughput": None,
-                            "errorRate": None
+                "aspects": [
+                    {
+                        "llmModelProperties": {
+                            "modelName": model.model_name,
+                            "provider": "OpenAI",
+                            "parameters": model.model_kwargs,
+                            "modelFamily": "GPT",
+                            "modelType": "chat",
+                            "capabilities": ["chat", "text-generation"],
+                            "metrics": {
+                                "averageLatency": None,
+                                "tokenThroughput": None,
+                                "errorRate": None,
+                            },
                         }
                     }
-                }]
+                ],
             }
         }
         return self.emit_metadata(mce_dict)
@@ -63,11 +70,19 @@ class LangChainMetadataEmitter:
         for message in prompt.messages:
             # Each message is a BaseMessagePromptTemplate
             # The type is determined by the class name
-            message_type = message.__class__.__name__.lower().replace('messageprompttemplate', '')
-            formatted_messages.append({
-                "role": message_type,  # Will be 'system', 'human', etc.
-                "content": message.prompt.template if hasattr(message.prompt, 'template') else str(message.prompt)
-            })
+            message_type = message.__class__.__name__.lower().replace(
+                "messageprompttemplate", ""
+            )
+            formatted_messages.append(
+                {
+                    "role": message_type,  # Will be 'system', 'human', etc.
+                    "content": (
+                        message.prompt.template
+                        if hasattr(message.prompt, "template")
+                        else str(message.prompt)
+                    ),
+                }
+            )
 
         # Create a stable string for hashing
         prompt_str = json.dumps(formatted_messages, sort_keys=True)
@@ -77,26 +92,28 @@ class LangChainMetadataEmitter:
         mce_dict = {
             "proposedSnapshot": {
                 "urn": prompt_urn,
-                "aspects": [{
-                    "llmPromptProperties": {
-                        "template": json.dumps(formatted_messages, indent=2),
-                        "inputVariables": list(prompt.input_variables),
-                        "templateFormat": "chat",
-                        "category": "System",
-                        "metadata": {
-                            "description": "Chat prompt with system and human messages",
-                            "createdAt": datetime.now().isoformat(),
-                            "usage": {
-                                "totalCalls": 0,
-                                "successRate": 0.0,
-                                "averageTokens": 0
-                            }
-                        },
-                        "version": "1.0",
-                        "tags": ["chat", "system-prompt"],
-                        "examples": []
+                "aspects": [
+                    {
+                        "llmPromptProperties": {
+                            "template": json.dumps(formatted_messages, indent=2),
+                            "inputVariables": list(prompt.input_variables),
+                            "templateFormat": "chat",
+                            "category": "System",
+                            "metadata": {
+                                "description": "Chat prompt with system and human messages",
+                                "createdAt": datetime.now().isoformat(),
+                                "usage": {
+                                    "totalCalls": 0,
+                                    "successRate": 0.0,
+                                    "averageTokens": 0,
+                                },
+                            },
+                            "version": "1.0",
+                            "tags": ["chat", "system-prompt"],
+                            "examples": [],
+                        }
                     }
-                }]
+                ],
             }
         }
         return self.emit_metadata(mce_dict)
@@ -109,52 +126,52 @@ class LangChainMetadataEmitter:
         mce_dict = {
             "proposedSnapshot": {
                 "urn": chain_urn,
-                "aspects": [{
-                    "llmChainProperties": {
-                        "chainType": "RunnableSequence",
-                        "components": [model_urn, prompt_urn],
-                        "description": "LangChain component for processing and generating text",
-                        "category": "Generation",
-                        "configuration": {
-                            "maxRetries": 3,
-                            "verbose": False,
-                            "callbacks": []
-                        },
-                        "performance": {
-                            "averageLatency": None,
-                            "successRate": None,
-                            "costPerRun": None
-                        },
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "question": {"type": "string"}
+                "aspects": [
+                    {
+                        "llmChainProperties": {
+                            "chainType": "RunnableSequence",
+                            "components": [model_urn, prompt_urn],
+                            "description": "LangChain component for processing and generating text",
+                            "category": "Generation",
+                            "configuration": {
+                                "maxRetries": 3,
+                                "verbose": False,
+                                "callbacks": [],
                             },
-                            "required": ["question"]
-                        },
-                        "outputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "content": {"type": "string"}
-                            }
+                            "performance": {
+                                "averageLatency": None,
+                                "successRate": None,
+                                "costPerRun": None,
+                            },
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {"question": {"type": "string"}},
+                                "required": ["question"],
+                            },
+                            "outputSchema": {
+                                "type": "object",
+                                "properties": {"content": {"type": "string"}},
+                            },
                         }
                     }
-                }]
+                ],
             }
         }
         return self.emit_metadata(mce_dict)
 
+
 def run_example():
     is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
     if is_dry_run:
-        print("\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub")
+        print(
+            "\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub"
+        )
 
     # Initialize LangChain components with chat model
-    llm = ChatOpenAI(model_name='gpt-4o-mini')
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a helpful assistant."),
-        ("human", "{question}")
-    ])
+    llm = ChatOpenAI(model_name="gpt-4o-mini")
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", "You are a helpful assistant."), ("human", "{question}")]
+    )
 
     # Create chain using new style
     chain = prompt | llm
@@ -183,6 +200,7 @@ def run_example():
         print(f"Error during execution: {str(e)}")
         if not is_dry_run:
             raise
+
 
 if __name__ == "__main__":
     run_example()

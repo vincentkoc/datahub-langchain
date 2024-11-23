@@ -1,21 +1,31 @@
-.PHONY: install test lint clean dry-run run
+.PHONY: install test lint clean dry-run run venv dev format
 
-install:
-	python -m pip install --upgrade pip
-	pip install -r requirements.txt
-	pip install -r requirements-dev.txt
+PYTHON := python3
+VENV := .venv
+BIN := $(VENV)/bin
 
-test:
-	python -m pytest tests/ -v --cov=src --cov-report=term-missing
+venv:
+	$(PYTHON) -m venv $(VENV)
+#	$(BIN)/python -m pip install --upgrade pip wheel setuptools
 
-lint:
-	flake8 src/ tests/
-	black src/ tests/ --check
-	isort src/ tests/ --check-only
+install: venv
+	$(BIN)/pip install -r requirements.txt
 
-format:
-	black src/ tests/
-	isort src/ tests/
+dev: install
+	$(BIN)/pip install -r requirements-dev.txt
+
+test: dev
+	$(BIN)/pytest tests/ -v --cov=src --cov-report=term-missing
+
+lint: dev
+	$(BIN)/flake8 src/ tests/
+	$(BIN)/black src/ tests/ --check
+	$(BIN)/isort src/ tests/ --check-only
+	$(BIN)/mypy src/ tests/
+
+format: dev
+	$(BIN)/black src/ tests/
+	$(BIN)/isort src/ tests/
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
@@ -27,12 +37,21 @@ clean:
 	find . -type d -name "*.egg" -exec rm -rf {} +
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
 	find . -type d -name ".coverage" -exec rm -rf {} +
+	find . -type d -name ".mypy_cache" -exec rm -rf {} +
+	rm -rf $(VENV)
 
 dry-run:
-	DATAHUB_DRY_RUN=true python src/langchain_example.py
-	DATAHUB_DRY_RUN=true python src/langsmith_ingestion.py
+	DATAHUB_DRY_RUN=true $(BIN)/python src/langchain_example.py
+	DATAHUB_DRY_RUN=true $(BIN)/python src/langsmith_ingestion.py
 
 run:
-	python src/metadata_setup.py
-	python src/langchain_example.py
-	python src/langsmith_ingestion.py
+	$(BIN)/python src/metadata_setup.py
+	$(BIN)/python src/langchain_example.py
+	$(BIN)/python src/langsmith_ingestion.py
+
+# Docker commands
+docker-up:
+	datahub docker quickstart
+
+docker-down:
+	datahub docker nuke

@@ -1,6 +1,8 @@
-import pytest
 from datetime import datetime
 from unittest.mock import Mock
+
+import pytest
+
 
 @pytest.fixture
 def sample_mce():
@@ -8,17 +10,19 @@ def sample_mce():
     return {
         "proposedSnapshot": {
             "urn": "test:urn",
-            "aspects": [{"testAspect": {"key": "value"}}]
+            "aspects": [{"testAspect": {"key": "value"}}],
         }
     }
+
 
 @pytest.fixture
 def sample_icons():
     """Sample base64 encoded icons for testing"""
     return {
         "langchain": "PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiPjwvc3ZnPg==",
-        "openai": "PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiPjwvc3ZnPg=="
+        "openai": "PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiPjwvc3ZnPg==",
     }
+
 
 @pytest.fixture
 def mock_failed_run():
@@ -33,9 +37,12 @@ def mock_failed_run():
     run.outputs = None
     return run
 
+
 @pytest.fixture
 def mock_datahub_error():
     """Mock DataHub error response"""
+
     class DataHubError(Exception):
         pass
+
     return DataHubError("Failed to emit metadata")

@@ -1,5 +1,7 @@
 import pytest
+
 from src.langchain_example import LangChainMetadataEmitter
+
 
 def test_provider_icon_generation(sample_icons):
     emitter = LangChainMetadataEmitter()
@@ -11,6 +13,7 @@ def test_provider_icon_generation(sample_icons):
     # Test unknown provider
     unknown_icon = emitter.get_provider_icon("UnknownProvider")
     assert unknown_icon == ""
+
 
 def test_chain_icon_generation(sample_icons):
     emitter = LangChainMetadataEmitter()

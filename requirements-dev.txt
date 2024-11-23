@@ -1,10 +1,22 @@
+# Testing
 pytest
 pytest-cov
+pytest-mock
+responses
+
+# Linting and formatting
 black
 flake8
 isort
-pytest-mock
-responses
+mypy
+
+# Type stubs
+# types-python-dateuti
+types-requests
+
+# Development tools
+ipython
+ipdb
 
 # docker image to run local datahub
 acryl-datahub

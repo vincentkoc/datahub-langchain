@@ -1,8 +1,11 @@
-import pytest
 from datetime import datetime
 from unittest.mock import Mock, patch
+
+import pytest
+
 from src.langsmith_ingestion import LangSmithIngestion
 from src.metadata_setup import DryRunEmitter
+
 
 @pytest.fixture
 def mock_run():
@@ -15,12 +18,14 @@ def mock_run():
     run.outputs = {"test": "output"}
     return run
 
+
 @pytest.fixture
 def mock_client():
     with patch("langsmith.Client") as mock:
         client = Mock()
         mock.return_value = client
         yield client
+
 
 def test_emit_run_metadata(mock_run):
     ingestion = LangSmithIngestion()
@@ -34,6 +39,7 @@ def test_emit_run_metadata(mock_run):
     run_props = emitted[0]["proposedSnapshot"]["aspects"][0]["llmRunProperties"]
     assert run_props["runId"] == mock_run.id
     assert run_props["status"] == mock_run.status
+
 
 def test_ingest_recent_runs(mock_client, mock_run):
     mock_client.list_runs.return_value = [mock_run]

@@ -1,10 +1,13 @@
-import pytest
 from unittest.mock import Mock, patch
-from langchain_openai import ChatOpenAI
+
+import pytest
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnableSequence
+from langchain_openai import ChatOpenAI
+
 from src.langchain_example import LangChainMetadataEmitter
 from src.metadata_setup import DryRunEmitter
+
 
 @pytest.fixture
 def mock_llm():
@@ -13,21 +16,24 @@ def mock_llm():
     llm.model_kwargs = {"temperature": 0.7}
     return llm
 
+
 @pytest.fixture
 def mock_prompt():
     prompt = Mock(spec=ChatPromptTemplate)
     prompt.messages = [
         ("system", "You are a helpful assistant."),
-        ("human", "{question}")
+        ("human", "{question}"),
     ]
     prompt.input_variables = ["question"]
     return prompt
+
 
 @pytest.fixture
 def mock_chain():
     chain = Mock(spec=RunnableSequence)
     chain.__class__.__name__ = "RunnableSequence"
     return chain
+
 
 def test_dry_run_mode(mock_llm, monkeypatch):
     """Test emitter behavior in dry run mode"""
@@ -37,6 +43,7 @@ def test_dry_run_mode(mock_llm, monkeypatch):
     urn = emitter.emit_model_metadata(mock_llm)
     assert urn == f"urn:li:llmModel:{mock_llm.model_name}"
     assert emitter.is_dry_run == True
+
 
 def test_emit_model_metadata(mock_llm):
     emitter = LangChainMetadataEmitter()
@@ -51,6 +58,7 @@ def test_emit_model_metadata(mock_llm):
     assert model_props["modelName"] == mock_llm.model_name
     assert model_props["modelType"] == "chat"
 
+
 def test_emit_prompt_metadata(mock_prompt):
     emitter = LangChainMetadataEmitter()
     emitter.emitter = DryRunEmitter()
@@ -63,6 +71,7 @@ def test_emit_prompt_metadata(mock_prompt):
     prompt_props = emitted[0]["proposedSnapshot"]["aspects"][0]["llmPromptProperties"]
     assert prompt_props["templateFormat"] == "chat"
     assert isinstance(prompt_props["template"], str)
+
 
 def test_emit_chain_metadata(mock_chain, mock_llm, mock_prompt):
     emitter = LangChainMetadataEmitter()
@@ -80,13 +89,14 @@ def test_emit_chain_metadata(mock_chain, mock_llm, mock_prompt):
     assert chain_props["chainType"] == "RunnableSequence"
     assert chain_props["components"] == [model_urn, prompt_urn]
 
+
 @pytest.mark.integration
 def test_run_example_with_dry_run(monkeypatch):
     """Test the full example run in dry run mode"""
     monkeypatch.setenv("DATAHUB_DRY_RUN", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
-    with patch('langchain_openai.ChatOpenAI') as mock_chat:
+    with patch("langchain_openai.ChatOpenAI") as mock_chat:
         mock_chat.return_value.invoke.return_value.content = "Paris"
         from src.langchain_example import run_example
 
