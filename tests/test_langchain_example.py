@@ -20,15 +20,19 @@ def mock_llm():
 
 @pytest.fixture
 def mock_prompt():
-    prompt = Mock(spec=ChatPromptTemplate)
-    system_message = Mock(spec=SystemMessage)
+    system_message = Mock()
+    system_message.type = "system"
+    system_message.prompt = Mock()
     system_message.prompt.template = "You are a helpful assistant."
     system_message.__class__.__name__ = "SystemMessagePromptTemplate"
 
-    human_message = Mock(spec=HumanMessage)
+    human_message = Mock()
+    human_message.type = "human"
+    human_message.prompt = Mock()
     human_message.prompt.template = "{question}"
     human_message.__class__.__name__ = "HumanMessagePromptTemplate"
 
+    prompt = Mock(spec=ChatPromptTemplate)
     prompt.messages = [system_message, human_message]
     prompt.input_variables = ["question"]
     return prompt

@@ -46,4 +46,5 @@ def test_metadata_setup_register_types(tmp_path):
 
     emitted = setup.emitter.get_emitted_mces()
     assert len(emitted) == 1
-    assert emitted[0]["proposedSnapshot"]["entityType"] == "testType"
+    assert emitted[0]["proposedSnapshot"]["urn"].endswith(f":testType")
+    assert "aspectSpecs" in emitted[0]["proposedSnapshot"]["aspects"][0]

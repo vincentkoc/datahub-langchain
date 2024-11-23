@@ -1,8 +1,26 @@
 import pytest
+from unittest.mock import Mock, patch
+from datetime import datetime
 
 from src.langchain_example import LangChainMetadataEmitter
 from src.langsmith_ingestion import LangSmithIngestion
 from src.metadata_setup import DryRunEmitter, MetadataSetup
+
+
+@pytest.fixture
+def mock_failed_run():
+    run = Mock()
+    run.id = "failed-run-id"
+    run.start_time = datetime.now()
+    run.end_time = datetime.now()
+    run.status = "failed"
+    run.error = "Test error message"
+    run.inputs = {"test": "input"}
+    run.outputs = None
+    run.execution_metadata = {"token_usage": {}}
+    run.execution_metadata.get = lambda x, default=None: {} if x == "token_usage" else default
+    run.feedback_list = []
+    return run
 
 
 def test_failed_run_ingestion(mock_failed_run):
