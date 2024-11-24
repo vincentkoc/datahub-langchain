@@ -38,28 +38,29 @@ class BaseMetadataEmitter:
         self.emitter = get_datahub_emitter(gms_server)
         self.is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
 
-        # Configure session with retries and timeouts
+        # Configure session with optimized retries and timeouts
         if hasattr(self.emitter, '_session'):
             retry_strategy = Retry(
-                total=self.MAX_RETRIES,
-                backoff_factor=0.5,
+                total=3,  # Reduced from 5
+                backoff_factor=0.2,  # Reduced from 0.5
                 status_forcelist=[500, 502, 503, 504],
+                allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST"]
             )
             adapter = HTTPAdapter(max_retries=retry_strategy)
             self.emitter._session.mount("http://", adapter)
             self.emitter._session.mount("https://", adapter)
-            self.emitter._session.timeout = self.TIMEOUT
+            self.emitter._session.timeout = 5  # Reduced from 10s
 
     def _emit_with_retry(self, mce: MetadataChangeEventClass, max_retries: int = None) -> None:
-        """Emit metadata with retry logic and timeout"""
+        """Emit metadata with retry logic and shorter timeouts"""
         retries = max_retries or self.MAX_RETRIES
         last_exception = None
         backoff = 1
 
         try:
-            # Set timeout for emission
+            # Set shorter timeout for emission
             if hasattr(self.emitter, '_session'):
-                self.emitter._session.timeout = self.TIMEOUT
+                self.emitter._session.timeout = 5  # Reduced from 10s to 5s
 
             # Create entity first with minimal aspects
             initial_mce = MetadataChangeEventClass(
@@ -75,7 +76,7 @@ class BaseMetadataEmitter:
             # Emit initial entity
             print("\nCreating entity...")
             self.emitter.emit(initial_mce)
-            time.sleep(1)  # Give time for entity to be created
+            time.sleep(0.5)  # Reduced from 1s to 0.5s
 
             # Then update with properties
             properties_mce = MetadataChangeEventClass(
@@ -84,6 +85,7 @@ class BaseMetadataEmitter:
                     aspects=[
                         aspect for aspect in mce.proposedSnapshot.aspects
                         if not isinstance(aspect, (StatusClass, BrowsePathsClass))
+                        and not isinstance(aspect, dict)  # Exclude lineage aspects
                     ]
                 )
             )
@@ -91,22 +93,26 @@ class BaseMetadataEmitter:
             # Emit properties
             print("Updating properties...")
             self.emitter.emit(properties_mce)
-            time.sleep(1)  # Give time for properties to be updated
+            time.sleep(0.5)  # Reduced from 1s to 0.5s
 
-            # Finally, add lineage if present
-            if any(isinstance(aspect, dict) and "com.linkedin.metadata.aspect.DownstreamLineage" in aspect
-                   for aspect in mce.proposedSnapshot.aspects):
-                lineage_mce = MetadataChangeEventClass(
-                    proposedSnapshot=mce.proposedSnapshot.__class__(
-                        urn=mce.proposedSnapshot.urn,
-                        aspects=[
-                            aspect for aspect in mce.proposedSnapshot.aspects
-                            if isinstance(aspect, dict) and "com.linkedin.metadata.aspect.DownstreamLineage" in aspect
-                        ]
-                    )
-                )
+            # Finally, add lineage aspects one at a time
+            lineage_aspects = [
+                aspect for aspect in mce.proposedSnapshot.aspects
+                if isinstance(aspect, dict) and
+                ("UpstreamLineage" in str(aspect) or "DownstreamLineage" in str(aspect))
+            ]
+
+            if lineage_aspects:
                 print("Adding lineage...")
-                self.emitter.emit(lineage_mce)
+                for aspect in lineage_aspects:
+                    lineage_mce = MetadataChangeEventClass(
+                        proposedSnapshot=mce.proposedSnapshot.__class__(
+                            urn=mce.proposedSnapshot.urn,
+                            aspects=[aspect]
+                        )
+                    )
+                    self.emitter.emit(lineage_mce)
+                    time.sleep(0.5)  # Add delay between lineage aspects
 
             return  # Success
 
@@ -161,13 +167,13 @@ class BaseMetadataEmitter:
                     else:
                         custom_properties[key] = str(value)
 
-            # Create aspects
+            # Create aspects list
             aspects = []
 
             # Add Status aspect
             aspects.append(StatusClass(removed=False))
 
-            # Add Properties aspect - remove name from direct constructor args
+            # Add Properties aspect
             aspects.append(properties_class(
                 description=description,
                 customProperties=custom_properties
@@ -176,7 +182,58 @@ class BaseMetadataEmitter:
             # Add BrowsePaths aspect
             aspects.append(BrowsePathsClass(paths=browse_paths))
 
-            # Create MCE
+            # Add lineage if upstream URNs provided
+            if upstream_urns:
+                # Add Upstream lineage
+                upstream_aspect = {
+                    "com.linkedin.metadata.aspect.UpstreamLineage": {
+                        "upstreams": [
+                            {
+                                "auditStamp": {
+                                    "time": int(datetime.now().timestamp() * 1000),
+                                    "actor": "urn:li:corpuser:datahub"
+                                },
+                                "dataset": {
+                                    "entityType": "dataset" if "dataset" in upstream_urn else "mlModel",
+                                    "urn": upstream_urn
+                                },
+                                "type": "TRANSFORMED"
+                            } for upstream_urn in upstream_urns
+                        ]
+                    }
+                }
+                aspects.append(upstream_aspect)
+
+                # Add Downstream lineage for each upstream
+                for upstream_urn in upstream_urns:
+                    downstream_aspect = {
+                        "com.linkedin.metadata.aspect.DownstreamLineage": {
+                            "downstreams": [{
+                                "auditStamp": {
+                                    "time": int(datetime.now().timestamp() * 1000),
+                                    "actor": "urn:li:corpuser:datahub"
+                                },
+                                "dataset": {
+                                    "entityType": "dataset" if entity_type == "DATASET" else "mlModel",
+                                    "urn": urn
+                                },
+                                "type": "TRANSFORMED"
+                            }]
+                        }
+                    }
+                    # Create downstream MCE
+                    downstream_mce = MetadataChangeEventClass(
+                        proposedSnapshot=DatasetSnapshotClass(
+                            urn=upstream_urn,
+                            aspects=[downstream_aspect]
+                        ) if "dataset" in upstream_urn else MLModelSnapshotClass(
+                            urn=upstream_urn,
+                            aspects=[downstream_aspect]
+                        )
+                    )
+                    self.emitter.emit(downstream_mce)
+
+            # Create MCE with all aspects
             mce = MetadataChangeEventClass(
                 proposedSnapshot=snapshot_class(
                     urn=urn,
@@ -184,29 +241,15 @@ class BaseMetadataEmitter:
                 )
             )
 
-            # Add lineage if upstream URNs provided
-            if upstream_urns:
-                aspects.append({
-                    "com.linkedin.metadata.aspect.DownstreamLineage": {
-                        "downstreams": [
-                            {
-                                "dataset": {"urn": upstream_urn},
-                                "type": "TRANSFORMED",
-                                "auditStamp": {
-                                    "time": int(datetime.now().timestamp() * 1000),
-                                    "actor": "urn:li:corpuser:datahub"
-                                }
-                            } for upstream_urn in upstream_urns
-                        ]
-                    }
-                })
-
             # Debug output
             print(f"\nEmitting metadata for {name}")
             print(f"URN: {urn}")
-            if self.is_dry_run:
-                print("Metadata structure:")
-                print(json.dumps(mce.to_obj(), indent=2))
+            if upstream_urns:
+                print(f"Upstream URNs: {upstream_urns}")
+                print("Lineage aspects:")
+                if "com.linkedin.metadata.aspect.UpstreamLineage" in aspects[-1]:
+                    print("Upstream Lineage:")
+                    print(json.dumps(aspects[-1], indent=2))
 
             # Emit metadata with retry
             if not self.is_dry_run:
@@ -216,10 +259,6 @@ class BaseMetadataEmitter:
                 except Exception as e:
                     print(f"Error emitting metadata: {str(e)}")
                     raise
-
-            # Add delay between emissions
-            if not self.is_dry_run:
-                time.sleep(METADATA_PUSH_DELAY)
 
             return urn
 
