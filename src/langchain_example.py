@@ -7,13 +7,10 @@ from dotenv import load_dotenv
 from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from datahub.emitter.mce_builder import make_dataset_urn, make_ml_model_urn, make_data_job_urn, make_data_flow_urn
+from datahub.emitter.mce_builder import make_dataset_urn, make_ml_model_urn
 from datahub.metadata.schema_classes import (
+    DatasetPropertiesClass,
     MLModelPropertiesClass,
-    MLModelKeyPropertiesClass,
-    DataJobPropertiesClass,
-    DataJobInputOutputClass,
-    DataFlowPropertiesClass,
     StatusClass,
     BrowsePathsClass,
 )
@@ -40,7 +37,8 @@ def run_example():
     try:
         # Emit model metadata (as MLModel)
         model_urn = llm_emitter.emit_model(
-            model=llm,
+            model_name=llm.model_name,
+            provider="OpenAI",
             model_type="chat",
             capabilities=["text-generation", "chat"],
             parameters={
@@ -58,15 +56,15 @@ def run_example():
             version="1.0"
         )
 
-        # Emit chain metadata (as DataFlow)
-        chain_urn = llm_emitter.emit_chain(
-            chain=chain,
+        # Emit chain metadata (as Dataset with pipeline subtype)
+        chain_urn = llm_emitter.emit_pipeline(
             chain_type="RunnableSequence",
-            upstream_urns=[model_urn, prompt_urn],
             config={
                 "max_retries": 3,
-                "verbose": False
-            }
+                "verbose": False,
+                "components": ["prompt", "model"]
+            },
+            upstream_urns=[model_urn, prompt_urn]
         )
 
         # Run the chain
@@ -78,15 +76,12 @@ def run_example():
         print(f"\nQuestion: {question}")
         print(f"Answer: {answer.content}")
 
-        # Emit run metadata (as DataJob)
+        # Emit run metadata (as Dataset with run subtype)
         run_urn = llm_emitter.emit_run(
             run_id=str(uuid.uuid4()),
             inputs={"question": question},
             outputs={"answer": answer.content},
             status="completed",
-            start_time=start_time,
-            end_time=end_time,
-            upstream_urns=[chain_urn],
             metrics={
                 "tokenUsage": {
                     "promptTokens": 0,
@@ -95,14 +90,21 @@ def run_example():
                 },
                 "latency": (end_time - start_time).total_seconds(),
                 "cost": 0
-            }
+            },
+            upstream_urns=[chain_urn],
+            tags=["example", "chat"]
         )
 
+        # Emit lineage relationships
+        llm_emitter.emit_lineage(chain_urn, model_urn, "Uses")
+        llm_emitter.emit_lineage(chain_urn, prompt_urn, "Uses")
+        llm_emitter.emit_lineage(run_urn, chain_urn, "ExecutedBy")
+
         print(f"\nMetadata URNs:")
-        print(f"Model (MLModel): {model_urn}")
-        print(f"Prompt (Dataset): {prompt_urn}")
-        print(f"Chain (DataFlow): {chain_urn}")
-        print(f"Run (DataJob): {run_urn}")
+        print(f"Model: {model_urn}")
+        print(f"Prompt: {prompt_urn}")
+        print(f"Chain: {chain_urn}")
+        print(f"Run: {run_urn}")
 
     except Exception as e:
         print(f"Error: {str(e)}")
