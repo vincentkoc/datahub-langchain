@@ -1,16 +1,27 @@
 import json
 import os
 from datetime import datetime
+import time
 
-from datahub.metadata.com.linkedin.pegasus2avro.mxe import MetadataChangeEvent
 from dotenv import load_dotenv
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.runnable import RunnableSequence
 from langchain_openai import ChatOpenAI
 
-from src.metadata_setup import get_datahub_emitter, make_dataset_urn
+from datahub.emitter.mce_builder import make_dataset_urn
+from datahub.metadata.schema_classes import (
+    DatasetPropertiesClass,
+    StatusClass,
+    BrowsePathsClass,
+    DatasetSnapshotClass,
+    MetadataChangeEventClass,
+)
+from src.metadata_setup import get_datahub_emitter
 
 load_dotenv()
+
+# Add delay between metadata pushes
+METADATA_PUSH_DELAY = 2.0
 
 
 class LangChainMetadataEmitter:
@@ -25,196 +36,196 @@ class LangChainMetadataEmitter:
         self.emitter = get_datahub_emitter(gms_server)
         self.is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
 
-    def emit_metadata(self, mce_dict: dict) -> str:
-        """Emit metadata with dry run handling"""
+    def emit_metadata(self, dataset_urn: str, name: str, description: str, custom_properties: dict, browse_paths: list = None) -> str:
+        """Emit metadata with consistent structure"""
         try:
-            if self.is_dry_run:
-                print(
-                    f"\nDRY RUN: Would emit metadata for {mce_dict['proposedSnapshot']['urn']}"
+            # Create browse paths
+            browse_paths_aspect = BrowsePathsClass(
+                paths=browse_paths or ["/langchain"]
+            )
+
+            # Create properties
+            properties = DatasetPropertiesClass(
+                name=name,
+                description=description,
+                customProperties=custom_properties
+            )
+
+            # Create status
+            status = StatusClass(removed=False)
+
+            # Create MetadataChangeEvent
+            mce = MetadataChangeEventClass(
+                proposedSnapshot=DatasetSnapshotClass(
+                    urn=dataset_urn,
+                    aspects=[
+                        status,
+                        properties,
+                        browse_paths_aspect
+                    ]
                 )
-            self.emitter.emit(mce_dict)
-            return mce_dict["proposedSnapshot"]["urn"]
+            )
+
+            # Debug output
+            print(f"\nEmitting metadata for {name}")
+            print(f"URN: {dataset_urn}")
+            if self.is_dry_run:
+                print("Metadata structure:")
+                print(json.dumps(mce.to_obj(), indent=2))
+
+            # Emit metadata
+            self.emitter.emit(mce)
+            print(f"Successfully emitted metadata for {name}")
+
+            # Add delay after emission
+            if not self.is_dry_run:
+                time.sleep(METADATA_PUSH_DELAY)
+
+            return dataset_urn
+
         except Exception as e:
             error_msg = f"Failed to emit metadata: {str(e)}"
-            if self.is_dry_run:
-                print(f"DRY RUN ERROR: {error_msg}")
-            else:
-                raise Exception(error_msg)
+            print(f"Error: {error_msg}")
+            if not self.is_dry_run:
+                raise
             return None
 
     def emit_model_metadata(self, model):
         """Emit metadata for an LLM model"""
-        # Use dataset URN format
         model_urn = make_dataset_urn(
-            platform="llm",
+            platform="langchain",
             name=f"model_{model.model_name}",
             env="PROD"
         )
 
-        mce_dict = {
-            "proposedSnapshot": {
-                "urn": model_urn,
-                "aspects": [
-                    {
-                        "DatasetProperties": {
-                            "name": model.model_name,
-                            "description": "LLM Model",
-                            "customProperties": {
-                                "provider": "OpenAI",
-                                "parameters": model.model_kwargs,
-                                "modelFamily": "GPT",
-                                "modelType": "chat",
-                                "capabilities": ["chat", "text-generation"],
-                            }
-                        }
-                    }
-                ],
-            }
+        custom_properties = {
+            "provider": "OpenAI",
+            "model_name": model.model_name,
+            "parameters": json.dumps(model.model_kwargs),
+            "modelFamily": "GPT",
+            "modelType": "chat",
+            "capabilities": json.dumps(["chat", "text-generation"]),
+            "created_at": datetime.now().isoformat()
         }
-        return self.emit_metadata(mce_dict)
+
+        browse_paths = [
+            "/langchain/models",
+            f"/langchain/models/{model.model_name}"
+        ]
+
+        return self.emit_metadata(
+            dataset_urn=model_urn,
+            name=model.model_name,
+            description=f"LLM Model: {model.model_name}",
+            custom_properties=custom_properties,
+            browse_paths=browse_paths
+        )
 
     def emit_prompt_metadata(self, prompt):
         """Emit metadata for a prompt template"""
-        # Properly extract message templates
+        # Format messages
         formatted_messages = []
         for message in prompt.messages:
-            # Each message is a BaseMessagePromptTemplate
-            # The type is determined by the class name
             message_type = message.__class__.__name__.lower().replace(
                 "messageprompttemplate", ""
             )
-            formatted_messages.append(
-                {
-                    "role": message_type,  # Will be 'system', 'human', etc.
-                    "content": (
-                        message.prompt.template
-                        if hasattr(message.prompt, "template")
-                        else str(message.prompt)
-                    ),
-                }
-            )
+            formatted_messages.append({
+                "role": message_type,
+                "content": (
+                    message.prompt.template
+                    if hasattr(message.prompt, "template")
+                    else str(message.prompt)
+                ),
+            })
 
-        # Create a stable string for hashing
+        # Create stable ID for prompt
         prompt_str = json.dumps(formatted_messages, sort_keys=True)
-        prompt_id = hash(prompt_str)
+        prompt_id = abs(hash(prompt_str))
         prompt_urn = make_dataset_urn(
-            platform="llm",
+            platform="langchain",
             name=f"prompt_{prompt_id}",
             env="PROD"
         )
 
-        mce_dict = {
-            "proposedSnapshot": {
-                "urn": prompt_urn,
-                "aspects": [
-                    {
-                        "DatasetProperties": {
-                            "name": f"prompt_{prompt_id}",
-                            "description": "Chat prompt with system and human messages",
-                            "customProperties": {
-                                "template": json.dumps(formatted_messages, indent=2),
-                                "inputVariables": list(prompt.input_variables),
-                                "templateFormat": "chat",
-                                "category": "System",
-                                "metadata": {
-                                    "description": "Chat prompt with system and human messages",
-                                    "createdAt": datetime.now().isoformat(),
-                                    "usage": {
-                                        "totalCalls": 0,
-                                        "successRate": 0.0,
-                                        "averageTokens": 0,
-                                    },
-                                },
-                                "version": "1.0",
-                                "tags": ["chat", "system-prompt"],
-                                "examples": [],
-                            }
-                        }
-                    }
-                ],
-            }
+        custom_properties = {
+            "template": json.dumps(formatted_messages, indent=2),
+            "inputVariables": json.dumps(list(prompt.input_variables)),
+            "templateFormat": "chat",
+            "category": "System",
+            "version": "1.0",
+            "tags": json.dumps(["chat", "system-prompt"]),
+            "created_at": datetime.now().isoformat()
         }
-        return self.emit_metadata(mce_dict)
+
+        browse_paths = [
+            "/langchain/prompts",
+            f"/langchain/prompts/{prompt_id}"
+        ]
+
+        return self.emit_metadata(
+            dataset_urn=prompt_urn,
+            name=f"Prompt {prompt_id}",
+            description="Chat prompt with system and human messages",
+            custom_properties=custom_properties,
+            browse_paths=browse_paths
+        )
 
     def emit_chain_metadata(self, chain, model_urn, prompt_urn):
         """Emit metadata for an LLM chain"""
-        chain_id = id(chain)
+        chain_id = abs(hash(id(chain)))
         chain_urn = make_dataset_urn(
-            platform="llm",
+            platform="langchain",
             name=f"chain_{chain_id}",
             env="PROD"
         )
 
-        mce_dict = {
-            "proposedSnapshot": {
-                "urn": chain_urn,
-                "aspects": [
-                    {
-                        "DatasetProperties": {
-                            "name": f"chain_{chain_id}",
-                            "description": "LangChain component for processing and generating text",
-                            "customProperties": {
-                                "chainType": "RunnableSequence",
-                                "components": [model_urn, prompt_urn],
-                                "description": "LangChain component for processing and generating text",
-                                "category": "Generation",
-                                "configuration": {
-                                    "maxRetries": 3,
-                                    "verbose": False,
-                                    "callbacks": [],
-                                },
-                                "performance": {
-                                    "averageLatency": None,
-                                    "successRate": None,
-                                    "costPerRun": None,
-                                },
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {"question": {"type": "string"}},
-                                    "required": ["question"],
-                                },
-                                "outputSchema": {
-                                    "type": "object",
-                                    "properties": {"content": {"type": "string"}},
-                                },
-                            }
-                        }
-                    }
-                ],
-            }
+        custom_properties = {
+            "chainType": "RunnableSequence",
+            "components": json.dumps([model_urn, prompt_urn]),
+            "category": "Generation",
+            "configuration": json.dumps({
+                "maxRetries": 3,
+                "verbose": False,
+            }),
+            "inputSchema": json.dumps({
+                "type": "object",
+                "properties": {"question": {"type": "string"}},
+                "required": ["question"],
+            }),
+            "outputSchema": json.dumps({
+                "type": "object",
+                "properties": {"content": {"type": "string"}},
+            }),
+            "created_at": datetime.now().isoformat()
         }
-        return self.emit_metadata(mce_dict)
 
-    def get_provider_icon(self, provider: str) -> str:
-        """Get provider icon"""
-        provider = provider.lower()
-        # Add base64 encoded SVG icons
-        icons = {
-            "openai": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiPjwvc3ZnPg==",
-            "langchain": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiPjwvc3ZnPg=="
-        }
-        return icons.get(provider, "")
+        browse_paths = [
+            "/langchain/chains",
+            f"/langchain/chains/{chain_id}"
+        ]
 
-    def get_chain_icon(self, chain_type: str) -> str:
-        """Get chain icon"""
-        # Default to LangChain icon
-        return self.get_provider_icon("langchain")
+        return self.emit_metadata(
+            dataset_urn=chain_urn,
+            name=f"Chain {chain_id}",
+            description="LangChain component for processing and generating text",
+            custom_properties=custom_properties,
+            browse_paths=browse_paths
+        )
 
 
 def run_example():
     is_dry_run = os.getenv("DATAHUB_DRY_RUN", "false").lower() == "true"
     if is_dry_run:
-        print(
-            "\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub"
-        )
+        print("\nRunning in DRY RUN mode - metadata will be printed but not sent to DataHub")
 
-    # Initialize LangChain components with chat model
-    llm = ChatOpenAI(model_name="gpt-4o-mini")
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", "You are a helpful assistant."), ("human", "{question}")]
-    )
+    # Initialize LangChain components
+    llm = ChatOpenAI(model_name="gpt-3.5-turbo")
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful assistant."),
+        ("human", "{question}")
+    ])
 
-    # Create chain using new style
+    # Create chain
     chain = prompt | llm
 
     # Initialize metadata emitter
@@ -226,7 +237,7 @@ def run_example():
         prompt_urn = metadata_emitter.emit_prompt_metadata(prompt)
         chain_urn = metadata_emitter.emit_chain_metadata(chain, model_urn, prompt_urn)
 
-        # Run the chain (always run in both modes)
+        # Run the chain
         question = "What is the capital of France?"
         answer = chain.invoke({"question": question})
         print(f"\nQuestion: {question}")
