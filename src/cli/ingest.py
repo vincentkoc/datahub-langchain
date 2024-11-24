@@ -1,3 +1,4 @@
+import sys
 import click
 from datetime import datetime, timedelta
 from typing import Optional
@@ -5,6 +6,7 @@ from typing import Optional
 from ..config import ObservabilityConfig, ObservabilitySetup
 from ..collectors.run_collector import RunCollector
 from ..collectors.model_collector import ModelCollector
+from ..emitters.datahub import DataHubEmitter
 
 @click.group()
 def cli():
@@ -17,11 +19,28 @@ def cli():
 @click.option('--platform', default='langsmith', help='Platform to ingest from')
 @click.option('--env-file', default=None, help='Path to .env file')
 @click.option('--batch-size', default=100, help='Batch size for ingestion')
-def ingest(days: int, limit: int, platform: str, env_file: Optional[str], batch_size: int):
+@click.option('--debug/--no-debug', default=False, help='Enable debug mode')
+@click.option('--hard-fail/--no-hard-fail', default=True, help='Stop on first failure')
+def ingest(days: int, limit: int, platform: str, env_file: Optional[str],
+          batch_size: int, debug: bool, hard_fail: bool):
     """Ingest historical data from observability platforms"""
 
     # Load configuration
     config = ObservabilityConfig.from_env(env_file)
+
+    # Initialize observability with debug and hard fail settings
+    obs = ObservabilitySetup(config)
+
+    # Get emitter with debug and hard fail settings
+    emitter = DataHubEmitter(
+        gms_server=config.datahub_gms_url,
+        debug=debug,
+        hard_fail=hard_fail
+    )
+
+    if debug:
+        click.echo("\nRunning in debug mode")
+        click.echo(f"Hard fail mode: {'enabled' if hard_fail else 'disabled'}")
 
     # Override config with CLI parameters
     config.ingest_window_days = days
@@ -29,7 +48,6 @@ def ingest(days: int, limit: int, platform: str, env_file: Optional[str], batch_
     config.ingest_batch_size = batch_size
 
     # Initialize observability
-    obs = ObservabilitySetup(config)
     obs.setup()
 
     # Get connector for specified platform
@@ -41,9 +59,6 @@ def ingest(days: int, limit: int, platform: str, env_file: Optional[str], batch_
     # Setup collectors
     run_collector = RunCollector([connector])
     model_collector = ModelCollector([connector])
-
-    # Get emitter
-    emitter = obs.get_emitter()
 
     click.echo(f"\nIngesting data from {platform}...")
     click.echo(f"Time window: {config.ingest_window_days} days")
@@ -58,7 +73,8 @@ def ingest(days: int, limit: int, platform: str, env_file: Optional[str], batch_
         for model in models:
             try:
                 emitter.emit_model(model)
-                click.echo(f"✓ Emitted model: {model.name}")
+                if debug:
+                    click.echo(f"✓ Emitted model: {model.name}")
             except Exception as e:
                 click.echo(f"✗ Failed to emit model {model.name}: {e}")
 
@@ -75,16 +91,20 @@ def ingest(days: int, limit: int, platform: str, env_file: Optional[str], batch_
         click.echo(f"Found {len(runs)} runs")
 
         # Process runs in batches
-        for i in range(0, len(runs), config.ingest_batch_size):
-            batch = runs[i:i + config.ingest_batch_size]
-            click.echo(f"\nProcessing batch {i//config.ingest_batch_size + 1}...")
+        for i in range(0, len(runs), batch_size):
+            batch = runs[i:i + batch_size]
+            click.echo(f"\nProcessing batch {i//batch_size + 1}...")
 
             for run in batch:
                 try:
                     emitter.emit_run(run)
-                    click.echo(f"✓ Emitted run: {run.id}")
+                    if debug:
+                        click.echo(f"✓ Emitted run: {run.id}")
                 except Exception as e:
                     click.echo(f"✗ Failed to emit run {run.id}: {e}")
+                    if hard_fail:
+                        click.echo("\nStopping due to hard fail mode")
+                        sys.exit(1)  # Exit immediately on failure
 
         # Print statistics
         click.echo("\nRun Statistics:")

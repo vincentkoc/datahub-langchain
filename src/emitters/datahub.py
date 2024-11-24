@@ -40,21 +40,50 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
         self._session.mount("https://", adapter)
         self._session.timeout = 5
 
-        # Set up authentication
-        if token:
-            self._session.headers.update({
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "X-RestLi-Protocol-Version": "2.0.0"
-            })
-            if self.debug:
-                self._debug("Session headers after auth setup:", self._session.headers)
+        # Set up authentication and headers
+        self._session.headers.update({
+            "Authorization": f"Bearer {token}" if token else "",
+            "Content-Type": "application/json",
+            "X-RestLi-Protocol-Version": "2.0.0",
+            "Accept": "application/json"
+        })
+
+        if self.debug:
+            self._debug("Session headers after auth setup:", dict(self._session.headers))
 
     def emit(self, *events: MetadataChangeEventClass) -> None:
+        """Override emit to add debugging and proper request formatting"""
         if self.debug:
-            self._debug("Emitting events with headers:", self._session.headers)
+            self._debug("Emitting events with headers:", dict(self._session.headers))
+
         try:
-            super().emit(*events)
+            for event in events:
+                url = f"{self._gms_server}/entities?action=ingest"
+                headers = {
+                    "X-RestLi-Protocol-Version": "2.0.0",
+                    "Content-Type": "application/json"
+                }
+
+                # Prepare the payload according to DataHub's API requirements
+                payload = {
+                    "entity": {
+                        "value": event.to_obj()
+                    }
+                }
+
+                if self.debug:
+                    self._debug("Request URL:", url)
+                    self._debug("Request payload:", payload)
+
+                response = self._session.post(url, json=payload, headers=headers)
+
+                if self.debug:
+                    self._debug("Response status:", response.status_code)
+                    self._debug("Response body:", response.text)
+
+                if response.status_code != 200:
+                    response.raise_for_status()
+
         except Exception as e:
             if self.debug:
                 self._debug_error(e)
