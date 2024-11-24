@@ -132,7 +132,11 @@ class BaseMetadataEmitter:
         try:
             # Create URN based on entity type
             if entity_type == "MLMODEL":
-                urn = make_ml_model_urn(platform=self.platform, name=name, env="PROD")
+                urn = make_ml_model_urn(
+                    platform=self.platform,
+                    model_name=name,
+                    env="PROD"
+                )
                 properties_class = MLModelPropertiesClass
                 snapshot_class = MLModelSnapshotClass
             else:  # Default to DATASET for everything else
@@ -148,7 +152,8 @@ class BaseMetadataEmitter:
                 "platform_instance": self.platform,
                 "created_at": datetime.now().isoformat(),
                 "logoUrl": icon_url,
-                "tags": tags
+                "tags": tags,
+                "name": name
             }.items():
                 if value is not None:
                     if isinstance(value, (dict, list)):
@@ -162,9 +167,8 @@ class BaseMetadataEmitter:
             # Add Status aspect
             aspects.append(StatusClass(removed=False))
 
-            # Add Properties aspect
+            # Add Properties aspect - remove name from direct constructor args
             aspects.append(properties_class(
-                name=name,
                 description=description,
                 customProperties=custom_properties
             ))
