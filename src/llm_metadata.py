@@ -249,32 +249,65 @@ class LLMMetadataEmitter:
 
     def emit_lineage(self, source_urn: str, target_urn: str, lineage_type: str = "Produces"):
         """Emit explicit lineage between entities"""
-        mce = MetadataChangeEventClass(
-            proposedSnapshot=DatasetSnapshotClass(
-                urn=source_urn,
-                aspects=[{
-                    "com.linkedin.metadata.aspect.DownstreamLineage": {
-                        "downstreams": [{
-                            "dataset": {"urn": target_urn},
-                            "type": lineage_type,
-                            "auditStamp": {
-                                "time": int(datetime.now().timestamp() * 1000),
-                                "actor": "urn:li:corpuser:datahub"
-                            }
-                        }]
-                    }
-                }]
-            )
-        )
-
-        print(f"\nEmitting lineage:")
-        print(f"Source: {source_urn}")
-        print(f"Target: {target_urn}")
-        print(f"Type: {lineage_type}")
-
         try:
-            self.run_emitter.emitter.emit(mce)
+            # Determine entity types
+            source_is_dataset = "dataset" in source_urn
+            target_is_dataset = "dataset" in target_urn
+
+            # Emit upstream lineage
+            upstream_mce = MetadataChangeEventClass(
+                proposedSnapshot=(DatasetSnapshotClass if source_is_dataset else MLModelSnapshotClass)(
+                    urn=source_urn,
+                    aspects=[{
+                        "com.linkedin.metadata.aspect.UpstreamLineage": {
+                            "upstreams": [{
+                                "auditStamp": {
+                                    "time": int(datetime.now().timestamp() * 1000),
+                                    "actor": "urn:li:corpuser:datahub"
+                                },
+                                "dataset": {
+                                    "entityType": "dataset" if target_is_dataset else "mlModel",
+                                    "urn": target_urn
+                                },
+                                "type": lineage_type
+                            }]
+                        }
+                    }]
+                )
+            )
+
+            # Emit downstream lineage
+            downstream_mce = MetadataChangeEventClass(
+                proposedSnapshot=(DatasetSnapshotClass if target_is_dataset else MLModelSnapshotClass)(
+                    urn=target_urn,
+                    aspects=[{
+                        "com.linkedin.metadata.aspect.DownstreamLineage": {
+                            "downstreams": [{
+                                "auditStamp": {
+                                    "time": int(datetime.now().timestamp() * 1000),
+                                    "actor": "urn:li:corpuser:datahub"
+                                },
+                                "dataset": {
+                                    "entityType": "dataset" if source_is_dataset else "mlModel",
+                                    "urn": source_urn
+                                },
+                                "type": lineage_type
+                            }]
+                        }
+                    }]
+                )
+            )
+
+            print(f"\nEmitting lineage:")
+            print(f"Source: {source_urn}")
+            print(f"Target: {target_urn}")
+            print(f"Type: {lineage_type}")
+
+            # Emit both aspects
+            self.run_emitter.emitter.emit(upstream_mce)
+            self.run_emitter.emitter.emit(downstream_mce)
             print("Successfully emitted lineage")
+
         except Exception as e:
             print(f"Failed to emit lineage: {e}")
             if not self.run_emitter.is_dry_run:
