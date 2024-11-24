@@ -1,99 +1,134 @@
 {
-  "entityType": "llmRun",
-  "aspectSpecs": [
+  "name": "llmRun",
+  "keyAspect": "llmRunKey",
+  "aspects": [
     {
       "name": "llmRunProperties",
-      "version": 1,
-      "jsonSchema": {
-        "type": "object",
-        "properties": {
-          "runId": { "type": "string" },
-          "name": { "type": "string" },
-          "startTime": { "type": "string", "format": "date-time" },
-          "endTime": { "type": "string", "format": "date-time" },
-          "status": {
-            "type": "string",
-            "enum": ["completed", "failed", "running", "error"]
-          },
-          "error": { "type": "string" },
-          "inputs": { "type": "object" },
-          "outputs": { "type": "object" },
-          "runtime": { "type": "number" },
-          "parentRunId": { "type": "string" },
-          "childRunIds": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "tags": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
-          "feedback": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "key": { "type": "string" },
-                "value": { "type": "number" },
-                "comment": { "type": "string" },
-                "timestamp": { "type": "string", "format": "date-time" }
-              }
-            }
-          },
-          "metrics": {
-            "type": "object",
-            "properties": {
-              "tokenUsage": {
-                "type": "object",
-                "properties": {
-                  "promptTokens": { "type": "integer" },
-                  "completionTokens": { "type": "integer" },
-                  "totalTokens": { "type": "integer" }
-                }
-              },
-              "latency": { "type": "number" },
-              "cost": { "type": "number" }
-            }
-          },
-          "trace": {
-            "type": "object",
-            "properties": {
-              "projectName": { "type": "string" },
-              "sessionName": { "type": "string" },
-              "executionOrder": { "type": "integer" }
-            }
-          }
+      "type": "record",
+      "doc": "Properties of an LLM run",
+      "fields": [
+        {
+          "name": "id",
+          "type": "string",
+          "doc": "Unique run identifier"
         },
-        "required": ["runId", "startTime", "status"]
-      }
+        {
+          "name": "name",
+          "type": "string",
+          "doc": "Run name"
+        },
+        {
+          "name": "runType",
+          "type": "string",
+          "doc": "Type of run (e.g. llm, chain, tool)"
+        },
+        {
+          "name": "startTime",
+          "type": "string",
+          "doc": "Run start timestamp"
+        },
+        {
+          "name": "endTime",
+          "type": "string",
+          "doc": "Run end timestamp"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "doc": "Run status"
+        },
+        {
+          "name": "error",
+          "type": ["null", "string"],
+          "doc": "Error message if failed"
+        },
+        {
+          "name": "executionOrder",
+          "type": "int",
+          "doc": "Order of execution"
+        },
+        {
+          "name": "inputs",
+          "type": "map",
+          "values": "string",
+          "doc": "Run inputs"
+        },
+        {
+          "name": "outputs",
+          "type": "map",
+          "values": "string",
+          "doc": "Run outputs"
+        },
+        {
+          "name": "parentRunId",
+          "type": ["null", "string"],
+          "doc": "Parent run ID"
+        },
+        {
+          "name": "childRunIds",
+          "type": {
+            "type": "array",
+            "items": "string"
+          },
+          "doc": "Child run IDs"
+        },
+        {
+          "name": "tags",
+          "type": {
+            "type": "array",
+            "items": "string"
+          },
+          "doc": "Run tags"
+        },
+        {
+          "name": "metrics",
+          "type": "record",
+          "fields": [
+            {
+              "name": "tokenUsage",
+              "type": "record",
+              "fields": [
+                {"name": "totalTokens", "type": "int"},
+                {"name": "promptTokens", "type": "int"},
+                {"name": "completionTokens", "type": "int"}
+              ]
+            },
+            {"name": "totalCost", "type": ["null", "string"]},
+            {"name": "promptCost", "type": ["null", "string"]},
+            {"name": "completionCost", "type": ["null", "string"]}
+          ]
+        },
+        {
+          "name": "feedback",
+          "type": "map",
+          "values": {
+            "type": "record",
+            "fields": [
+              {"name": "n", "type": "int"},
+              {"name": "avg", "type": "double"}
+            ]
+          },
+          "doc": "Feedback statistics"
+        }
+      ]
     }
   ],
-  "browsePaths": [
-    "/llm/runs",
-    "/llm/runs/${runId}"
-  ],
-  "relationships": [
-    {
-      "name": "RunsOn",
-      "entityTypes": ["llmModel"]
-    },
-    {
-      "name": "Uses",
-      "entityTypes": ["llmPrompt"]
-    },
-    {
-      "name": "PartOf",
-      "entityTypes": ["llmChain"]
-    }
-  ],
+  "entityTypes": ["DATAPROCESS"],
   "searchableFields": [
     {
-      "fieldPath": "runId",
-      "fieldType": "TEXT_PARTIAL",
-      "enableAutocomplete": true
+      "fieldPath": "id",
+      "fieldType": "TEXT_PARTIAL"
     },
     {
       "fieldPath": "status",
+      "fieldType": "KEYWORD"
+    },
+    {
+      "fieldPath": "runType",
+      "fieldType": "KEYWORD"
+    },
+    {
+      "fieldPath": "tags",
       "fieldType": "KEYWORD"
     }
   ]

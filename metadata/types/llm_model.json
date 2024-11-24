@@ -1,29 +1,36 @@
 {
-  "entityType": "llmModel",
-  "aspectSpecs": [
+  "name": "llmModel",
+  "keyAspect": "llmModelKey",
+  "aspects": [
     {
       "name": "llmModelProperties",
-      "version": 1,
-      "jsonSchema": {
-        "type": "object",
-        "properties": {
-          "modelName": { "type": "string" },
-          "provider": { "type": "string" },
-          "parameters": { "type": "object" },
-          "modelFamily": { "type": "string" },
-          "modelType": { "type": "string", "enum": ["text", "chat", "embedding"] },
-          "contextWindow": { "type": "integer" },
-          "tokenLimit": { "type": "integer" },
-          "costPerToken": { "type": "number" },
-          "icon": {
-            "type": "string",
-            "description": "URL or Base64 encoded icon"
-          },
-          "capabilities": {
+      "type": "record",
+      "doc": "Properties of an LLM model",
+      "fields": [
+        {
+          "name": "provider",
+          "type": "string",
+          "doc": "Model provider (e.g. OpenAI)"
+        },
+        {
+          "name": "modelFamily",
+          "type": "string",
+          "doc": "Model family (e.g. GPT)"
+        },
+        {
+          "name": "modelType",
+          "type": "enum",
+          "symbols": ["text", "chat", "embedding"],
+          "doc": "Type of model"
+        },
+        {
+          "name": "capabilities",
+          "type": {
             "type": "array",
             "items": {
-              "type": "string",
-              "enum": [
+              "type": "enum",
+              "name": "capability",
+              "symbols": [
                 "text-generation",
                 "chat",
                 "embeddings",
@@ -31,18 +38,31 @@
                 "function-calling"
               ]
             }
-          },
-          "metrics": {
-            "type": "object",
-            "properties": {
-              "averageLatency": { "type": "number" },
-              "tokenThroughput": { "type": "number" },
-              "errorRate": { "type": "number" }
-            }
           }
         },
-        "required": ["modelName", "provider"]
-      }
+        {
+          "name": "parameters",
+          "type": "record",
+          "fields": [
+            {
+              "name": "contextWindow",
+              "type": "int",
+              "doc": "Maximum context window size"
+            },
+            {
+              "name": "tokenLimit",
+              "type": "int",
+              "doc": "Maximum token limit"
+            },
+            {
+              "name": "costPerToken",
+              "type": "double",
+              "doc": "Cost per token"
+            }
+          ]
+        }
+      ]
     }
-  ]
+  ],
+  "entityTypes": ["MLMODEL"]
 }
