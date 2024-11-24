@@ -1,6 +1,8 @@
 networks:
-  default:
+  datahub_network:
     name: datahub_network
+    driver: bridge
+
 services:
   broker:
     depends_on:
@@ -29,6 +31,8 @@ services:
     - ${DATAHUB_MAPPED_KAFKA_BROKER_PORT:-9092}:9092
     volumes:
     - broker:/var/lib/kafka/data/
+    networks:
+      - datahub_network
   datahub-actions:
     depends_on:
       datahub-gms:
@@ -48,6 +52,8 @@ services:
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     hostname: actions
     image: ${DATAHUB_ACTIONS_IMAGE:-acryldata/datahub-actions}:${ACTIONS_VERSION:-head}
+    networks:
+      - datahub_network
   datahub-frontend-react:
     depends_on:
       datahub-gms:
@@ -72,6 +78,8 @@ services:
     - ${DATAHUB_MAPPED_FRONTEND_PORT:-9002}:9002
     volumes:
     - ${HOME}/.datahub/plugins:/etc/datahub/plugins
+    networks:
+      - datahub_network
   datahub-gms:
     depends_on:
       datahub-upgrade:
@@ -120,6 +128,8 @@ services:
     - ${DATAHUB_MAPPED_GMS_PORT:-8080}:8080
     volumes:
     - ${HOME}/.datahub/plugins:/etc/datahub/plugins
+    networks:
+      - datahub_network
   datahub-upgrade:
     command:
     - -u
@@ -154,7 +164,11 @@ services:
     image: ${DATAHUB_UPGRADE_IMAGE:-acryldata/datahub-upgrade}:${DATAHUB_VERSION:-head}
     labels:
       datahub_setup_job: true
+    networks:
+      - datahub_network
   elasticsearch:
+    networks:
+      - datahub_network
     deploy:
       resources:
         limits:
@@ -162,16 +176,17 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "cluster.routing.allocation.disk.threshold_enabled=false"
-      - "cluster.routing.allocation.disk.watermark.low=5gb"
-      - "cluster.routing.allocation.disk.watermark.high=4gb"
-      - "cluster.routing.allocation.disk.watermark.flood_stage=3gb"
       - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - "cluster.routing.allocation.disk.threshold_enabled=true"
+      - "cluster.routing.allocation.disk.watermark.low=85%"
+      - "cluster.routing.allocation.disk.watermark.high=90%"
+      - "cluster.routing.allocation.disk.watermark.flood_stage=95%"
+      - "cluster.info.update.interval=1m"
     healthcheck:
       interval: 1s
       retries: 3
       start_period: 20s
-      test: curl -sS --fail http://elasticsearch:$${DATAHUB_ELASTIC_PORT:-9200}/_cluster/health?wait_for_status=yellow&timeout=0s
+      test: curl -sS --fail http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=0s
       timeout: 5s
     hostname: elasticsearch
     image: ${DATAHUB_SEARCH_IMAGE:-elasticsearch}:${DATAHUB_SEARCH_TAG:-7.10.1}
@@ -187,6 +202,8 @@ services:
         soft: 65536
         hard: 65536
   elasticsearch-setup:
+    networks:
+      - datahub_network
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -201,6 +218,8 @@ services:
     labels:
       datahub_setup_job: true
   kafka-setup:
+    networks:
+      - datahub_network
     depends_on:
       broker:
         condition: service_healthy
@@ -216,6 +235,8 @@ services:
     labels:
       datahub_setup_job: true
   mysql:
+    networks:
+      - datahub_network
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin --default-authentication-plugin=mysql_native_password
     environment:
     - MYSQL_DATABASE=datahub
@@ -236,6 +257,8 @@ services:
     volumes:
     - mysqldata:/var/lib/mysql
   mysql-setup:
+    networks:
+      - datahub_network
     depends_on:
       mysql:
         condition: service_healthy
@@ -250,6 +273,8 @@ services:
     labels:
       datahub_setup_job: true
   schema-registry:
+    networks:
+      - datahub_network
     depends_on:
       broker:
         condition: service_healthy
@@ -268,6 +293,8 @@ services:
     ports:
     - ${DATAHUB_MAPPED_SCHEMA_REGISTRY_PORT:-8081}:8081
   zookeeper:
+    networks:
+      - datahub_network
     environment:
     - ZOOKEEPER_CLIENT_PORT=2181
     - ZOOKEEPER_TICK_TIME=2000

@@ -1,4 +1,4 @@
-.PHONY: install test lint clean dry-run run venv dev format check-connection setup-token
+.PHONY: install test lint clean dry-run run venv dev format check-connection setup-token docker-up docker-down docker-nuke
 
 PYTHON := python3
 VENV := .venv
@@ -59,10 +59,16 @@ docker-up:
 		echo "Creating .env file..."; \
 		cp .env.example .env; \
 	fi
-	DATAHUB_SECRET=${DATAHUB_SECRET} datahub docker quickstart --quickstart-compose-file docker-compose-quickstart.yml
+	@DATAHUB_SECRET=${DATAHUB_SECRET} datahub docker quickstart --quickstart-compose-file docker-compose-quickstart.yml
 
 docker-down:
 	datahub docker quickstart --stop
+
+docker-nuke:
+	datahub docker nuke
+
+docker-sample:
+	@DATAHUB_TOKEN=${DATAHUB_TOKEN} datahub docker ingest-sample-data --token ${DATAHUB_TOKEN}
 
 check-connection:
 	@echo "Testing DataHub connection..."
