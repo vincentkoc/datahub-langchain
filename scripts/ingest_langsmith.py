@@ -16,11 +16,13 @@ if env_file.exists():
     load_dotenv(env_file)
 
 if __name__ == "__main__":
-    # Run ingestion with default parameters
+    # Run ingestion with debug mode and hard fail enabled
     ingest.callback(
         days=7,
         limit=1000,
         platform="langsmith",
         env_file=str(env_file) if env_file.exists() else None,
-        batch_size=100
+        batch_size=100,
+        debug=True,  # Enable debug mode
+        hard_fail=True  # Enable hard fail mode
     )
