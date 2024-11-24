@@ -3,7 +3,12 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from langsmith import Client
-from ..base import LLMPlatformConnector, LLMModel, LLMRun, LLMChain
+from ..base import (
+    LLMPlatformConnector,
+    LLMModel,
+    LLMRun,
+    LLMChain
+)
 from ..models import Metrics
 from ..config import ObservabilityConfig
 
