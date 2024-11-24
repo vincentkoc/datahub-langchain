@@ -18,12 +18,11 @@ from datahub.metadata.schema_classes import (
     MLModelSnapshotClass,
 )
 
-from .base import BaseEmitter
 from ..base import LLMMetadataEmitter, LLMModel, LLMRun, LLMChain
 from ..config import ObservabilityConfig
 
 class CustomDatahubRestEmitter(DatahubRestEmitter):
-    """Custom DatahubRestEmitter that properly handles authentication"""
+    """DataHub REST emitter with enhanced authentication and error handling"""
 
     def __init__(self, gms_server: str, token: Optional[str] = None, debug: bool = False):
         super().__init__(gms_server=gms_server)
@@ -39,7 +38,7 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self._session.mount("http://", adapter)
         self._session.mount("https://", adapter)
-        self._session.timeout = 5  # 5 second timeout
+        self._session.timeout = 5
 
         # Set up authentication
         if token:
@@ -81,21 +80,15 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
                 f"Body: {e.response.text}"
             )
 
-class DataHubEmitter(BaseEmitter, LLMMetadataEmitter):
-    """Emits LLM metadata to DataHub"""
+class DataHubEmitter(LLMMetadataEmitter):
+    """Emits LLM metadata to DataHub with comprehensive error handling and lineage tracking"""
 
     def __init__(self, gms_server: Optional[str] = None, debug: bool = False, hard_fail: bool = True):
-        """Initialize DataHub emitter
-
-        Args:
-            gms_server: Optional GMS server URL
-            debug: Enable debug logging
-            hard_fail: If True, fail on first error. If False, continue processing
-        """
         self.platform = "llm"
         self.config = ObservabilityConfig.from_env()
         self.debug = debug
         self.hard_fail = hard_fail
+        self._emitted_urns = set()
 
         # Clean up GMS server URL
         self.gms_server = gms_server or self.config.datahub_gms_url
@@ -104,7 +97,6 @@ class DataHubEmitter(BaseEmitter, LLMMetadataEmitter):
 
         if self.debug:
             print(f"\nInitializing DataHub emitter with server: {self.gms_server}")
-            print(f"Token from config: {'present' if self.config.datahub_token else 'missing'}")
 
         # Initialize emitter with authentication
         self.emitter = CustomDatahubRestEmitter(
@@ -112,8 +104,6 @@ class DataHubEmitter(BaseEmitter, LLMMetadataEmitter):
             token=self.config.datahub_token,
             debug=self.debug
         )
-
-        self._emitted_urns = set()
 
     def _emit_with_retry(self, mce: MetadataChangeEventClass) -> None:
         """Emit metadata with proper error handling"""
