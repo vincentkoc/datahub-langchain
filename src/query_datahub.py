@@ -45,10 +45,10 @@ def query_datahub(query, variables=None):
 def search_runs():
     """Search for all LLM runs"""
     query = """
-    query searchDatasets {
+    query searchLLMEntities {
         search(input: {
-            type: DATASET,
-            query: "platform:llm",
+            type: ALL,
+            query: "*",
             start: 0,
             count: 10,
             orFilters: [{
@@ -72,26 +72,41 @@ def search_runs():
                                 value
                             }
                         }
-                        browsePaths {
-                            path
-                        }
-                        relationships(input: {
-                            types: ["RunsOn", "Uses", "PartOf"],
-                            direction: OUTGOING,
-                            start: 0,
-                            count: 10
-                        }) {
-                            total
-                            relationships {
-                                type
-                                entity {
-                                    urn
-                                    type
-                                }
+                        browsePaths
+                    }
+                    ... on MLModel {
+                        name
+                        description
+                        properties {
+                            customProperties {
+                                key
+                                value
                             }
                         }
+                        browsePaths
+                    }
+                    ... on DataJob {
+                        name
+                        properties {
+                            customProperties {
+                                key
+                                value
+                            }
+                        }
+                        browsePaths
+                    }
+                    ... on DataFlow {
+                        name
+                        properties {
+                            customProperties {
+                                key
+                                value
+                            }
+                        }
+                        browsePaths
                     }
                 }
+                searchScore
             }
         }
     }
@@ -101,33 +116,54 @@ def search_runs():
 def get_run_details(run_urn):
     """Get detailed information about a specific run"""
     query = """
-    query getDataset($urn: String!) {
-        dataset(urn: $urn) {
+    query getEntity($urn: String!) {
+        entity(urn: $urn) {
             urn
-            name
-            properties {
-                description
-                customProperties {
-                    key
-                    value
-                }
-            }
-            browsePaths {
-                path
-            }
-            relationships(input: {
-                types: ["RunsOn", "Uses", "PartOf"],
-                direction: OUTGOING,
-                start: 0,
-                count: 10
-            }) {
-                total
-                relationships {
-                    type
-                    entity {
-                        urn
-                        type
+            type
+            ... on DataJob {
+                name
+                properties {
+                    customProperties {
+                        key
+                        value
                     }
+                }
+                inputOutput {
+                    inputDatasets {
+                        dataset { urn }
+                    }
+                    outputDatasets {
+                        dataset { urn }
+                    }
+                }
+                status {
+                    status
+                    startTime
+                    endTime
+                }
+                browsePaths
+            }
+            ... on MLModel {
+                name
+                description
+                properties {
+                    customProperties {
+                        key
+                        value
+                    }
+                }
+                institutionalMemory {
+                    elements {
+                        url
+                        description
+                        created {
+                            time
+                        }
+                    }
+                }
+                deprecation {
+                    deprecated
+                    decommissionTime
                 }
             }
         }
@@ -135,13 +171,22 @@ def get_run_details(run_urn):
     """
     return query_datahub(query, {"urn": run_urn})
 
-def search_llm_data(session, server_url):
-    """Search for LLM-related data in DataHub"""
-    print("\n=== Searching for LLM Types ===")
-
+def search_by_type(entity_type, platform="llm"):
+    """Search for entities of a specific type"""
     query = """
-    query {
-        search(input: {type: DATASET, query: "llm", start: 0, count: 10}) {
+    query searchByType($type: EntityType!, $platform: String!) {
+        search(input: {
+            type: $type,
+            query: "*",
+            start: 0,
+            count: 10,
+            orFilters: [{
+                and: [{
+                    field: "platform",
+                    value: $platform
+                }]
+            }]
+        }) {
             total
             searchResults {
                 entity {
@@ -156,37 +201,75 @@ def search_llm_data(session, server_url):
                                 value
                             }
                         }
+                        browsePaths
+                    }
+                    ... on MLModel {
+                        name
+                        description
+                        properties {
+                            customProperties {
+                                key
+                                value
+                            }
+                        }
+                        browsePaths
+                    }
+                    ... on DataJob {
+                        name
+                        properties {
+                            customProperties {
+                                key
+                                value
+                            }
+                        }
+                        browsePaths
+                    }
+                    ... on DataFlow {
+                        name
+                        properties {
+                            customProperties {
+                                key
+                                value
+                            }
+                        }
+                        browsePaths
                     }
                 }
             }
         }
     }
     """
-
-    response = session.post(
-        f"{server_url}/api/graphql",
-        json={"query": query}
-    )
-
-    print(f"Request URL: {server_url}/api/graphql")
-    print(f"Response status: {response.status_code}")
-    print(json.dumps(response.json(), indent=2))
+    return query_datahub(query, {
+        "type": entity_type,
+        "platform": platform
+    })
 
 def main():
     parser = argparse.ArgumentParser(description='Query DataHub API')
-    parser.add_argument('--action', choices=['search', 'details'], default='search',
-                      help='Action to perform')
+    parser.add_argument('--action', choices=['search', 'details', 'models', 'runs', 'chains'],
+                      default='search', help='Action to perform')
     parser.add_argument('--urn', help='URN for detailed lookup')
+    parser.add_argument('--type', choices=['DATASET', 'MLMODEL', 'DATAJOB', 'DATAFLOW'],
+                      help='Entity type to search for')
 
     args = parser.parse_args()
 
     if args.action == 'search':
-        print("\n=== Searching for LLM Runs ===")
+        print("\n=== Searching for LLM Entities ===")
         result = search_runs()
         pretty_print_json(result)
     elif args.action == 'details' and args.urn:
         print(f"\n=== Getting Details for {args.urn} ===")
         result = get_run_details(args.urn)
+        pretty_print_json(result)
+    elif args.action in ['models', 'runs', 'chains']:
+        entity_type = {
+            'models': 'MLMODEL',
+            'runs': 'DATAJOB',
+            'chains': 'DATAFLOW'
+        }[args.action]
+        print(f"\n=== Searching for {args.action} ===")
+        result = search_by_type(entity_type)
         pretty_print_json(result)
     else:
         print("Please specify --urn when using --action details")
