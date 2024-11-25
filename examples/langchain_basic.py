@@ -42,10 +42,13 @@ def main():
             print(f"Warning: Platform registration failed: {e}")
             print("Continuing with execution...")
 
+        # Create pipeline name
+        pipeline_name = "langchain_basic"
+
         observer = LangChainObserver(
             config=config,
             emitter=emitter,
-            pipeline_name="langchain_basic",
+            pipeline_name=pipeline_name,
             group_models=False
         )
 
