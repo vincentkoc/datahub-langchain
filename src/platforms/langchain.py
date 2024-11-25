@@ -149,34 +149,70 @@ class LangChainConnector(LLMPlatformConnector):
         """Get observed LangChain chains"""
         return list(self.observed_chains.values())
 
-    def _create_model_from_langchain(self, model: Any) -> LLMModel:
-        """Create LLMModel from LangChain model with proper versioning"""
-        if isinstance(model, dict):
-            model_name = model.get('model_name') or model.get('id', [])
-        else:
-            model_name = getattr(model, 'model_name', 'unknown')
+    def _create_model_from_langchain(self, model_info: Any) -> LLMModel:
+        """Create LLMModel from LangChain model"""
+        try:
+            # Extract model name with better fallbacks
+            if isinstance(model_info, dict):
+                model_name = (
+                    model_info.get("model_name") or
+                    model_info.get("model") or
+                    model_info.get("name", "unknown")
+                )
+            else:
+                # For ChatOpenAI and similar objects
+                model_name = (
+                    getattr(model_info, "model_name", None) or  # This should get "gpt-3.5-turbo"
+                    getattr(model_info, "model", None) or
+                    getattr(model_info, "name", None) or
+                    model_info.__class__.__name__.lower()  # Last resort: use class name
+                )
 
-        normalized_name = normalize_model_name(model_name)
-        provider = get_provider_from_model(normalized_name)
-        family = get_model_family(normalized_name)
+            # Get raw name for reference (class name)
+            raw_name = (
+                model_info.__class__.__name__
+                if not isinstance(model_info, dict)
+                else model_info.get("class_name", "Unknown")
+            )
 
-        # Create a clean display name
-        display_name = f"{family}"  # e.g. "GPT-3.5 Turbo"
+            # Clean up model name and get metadata
+            model_name = normalize_model_name(model_name)  # This will convert ChatOpenAI to gpt-3.5-turbo
+            provider = get_provider_from_model(model_name)  # Will return "OpenAI"
+            model_family = get_model_family(model_name)  # Will return "GPT-3.5"
+            capabilities = get_capabilities_from_model(model_name)
+            parameters = get_model_parameters(model_info)
 
-        return LLMModel(
-            name=display_name,
-            provider=provider,
-            model_family=family,
-            capabilities=get_capabilities_from_model(normalized_name, model),
-            parameters=get_model_parameters(model),
-            metadata={
-                "source": "langchain",
-                "platform": "langchain",
-                "type": "chat" if "chat" in get_capabilities_from_model(normalized_name) else "completion",
-                "description": f"{provider} {display_name} Language Model",
-                "raw_name": normalized_name
-            }
-        )
+            # Create descriptive name and description
+            display_name = f"{provider} {model_name}"  # e.g. "OpenAI gpt-3.5-turbo"
+            description = f"{provider} {model_family} Model ({model_name})"  # e.g. "OpenAI GPT-3.5 Model (gpt-3.5-turbo)"
+
+            return LLMModel(
+                name=model_name,  # Use actual model name (gpt-3.5-turbo)
+                provider=provider,
+                model_family=model_family,
+                capabilities=capabilities,
+                parameters=parameters,
+                metadata={
+                    "raw_name": raw_name,  # Store class name here (ChatOpenAI)
+                    "source": "langchain",
+                    "display_name": display_name,
+                    "description": description
+                }
+            )
+        except Exception as e:
+            print(f"Error creating model from LangChain: {e}")
+            return LLMModel(
+                name="unknown_model",
+                provider="Unknown",
+                model_family="Unknown",
+                capabilities=["text-generation"],
+                parameters={},
+                metadata={
+                    "error": str(e),
+                    "source": "langchain",
+                    "description": "Unknown LangChain Model (Error during creation)"
+                }
+            )
 
     def _create_chain_from_langchain(self, chain: Any) -> LLMChain:
         """Create LLMChain from LangChain chain"""
@@ -253,8 +289,15 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
         self.connector = LangChainConnector(group_models=group_models)
         self.registered_models = set()
 
-        # Get pipeline name from source file or override
-        self.pipeline_name = pipeline_name or detect_pipeline_name()
+        # Use provided pipeline name or get from source file
+        self.pipeline_name = pipeline_name if pipeline_name else detect_pipeline_name()
+
+        # Store pipeline name in active runs for emission
+        self._pipeline_metadata = {
+            "pipeline_name": self.pipeline_name,
+            "framework": "langchain",
+            "source": "langchain"
+        }
 
     def on_llm_start(self, serialized: Dict, prompts: List[str], **kwargs) -> None:
         run_id = kwargs.get("run_id", str(uuid.uuid4()))
@@ -292,13 +335,14 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
                 id=run_id,
                 start_time=run_data["start_time"],
                 end_time=datetime.now(),
-                model=run_data["model_info"],  # Use stored model object
+                model=run_data["model_info"],
                 inputs={"prompts": run_data["prompts"]},
                 outputs={"generations": [g.text for g in response.generations[0]]},
                 metrics=metrics.__dict__,
                 parent_id=kwargs.get("parent_run_id"),
                 metadata={
                     **run_data["serialized"],
+                    **self._pipeline_metadata,  # Include pipeline metadata
                     "handler": self.config.langchain_handler
                 }
             )
