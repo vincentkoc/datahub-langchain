@@ -7,6 +7,7 @@ from ..config import ObservabilityConfig, ObservabilitySetup
 from ..collectors.run_collector import RunCollector
 from ..collectors.model_collector import ModelCollector
 from ..emitters.datahub import DataHubEmitter
+from ..platforms.langsmith import LangsmithIngestor
 
 @click.group()
 def cli():
@@ -21,8 +22,10 @@ def cli():
 @click.option('--batch-size', default=100, help='Batch size for ingestion')
 @click.option('--debug/--no-debug', default=False, help='Enable debug mode')
 @click.option('--hard-fail/--no-hard-fail', default=True, help='Stop on first failure')
+@click.option('--save-debug-data/--no-save-debug-data', default=True, help='Save raw and processed data for debugging')
+@click.option('--processing-dir', default=None, help='Path to the processing directory')
 def ingest(days: int, limit: int, platform: str, env_file: Optional[str],
-          batch_size: int, debug: bool, hard_fail: bool):
+          batch_size: int, debug: bool, hard_fail: bool, save_debug_data: bool, processing_dir: Optional[str]):
     """Ingest historical data from observability platforms"""
 
     # Load configuration

@@ -1,16 +1,20 @@
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from uuid import UUID
+import json
+from pathlib import Path
 
 from langsmith import Client
+from .base import BaseIngestor
 from ..base import (
     LLMPlatformConnector,
     LLMModel,
     LLMRun,
-    LLMChain
+    LLMChain,
 )
 from ..models import Metrics
 from ..config import ObservabilityConfig
+from src.utils.model_utils import get_capabilities_from_model
 
 class LangSmithConnector(LLMPlatformConnector):
     """Connector for LangSmith platform"""
@@ -99,7 +103,7 @@ class LangSmithConnector(LLMPlatformConnector):
             name=model_name,
             provider=self._get_provider_from_model(model_name),
             model_family=self._get_family_from_model(model_name),
-            capabilities=self._get_capabilities_from_model(model_name),
+            capabilities=get_capabilities_from_model(model_name),
             parameters={
                 "context_window": execution_metadata.get('context_window', 4096),
                 "max_tokens": execution_metadata.get('max_tokens', 4096),
@@ -186,10 +190,44 @@ class LangSmithConnector(LLMPlatformConnector):
             return 'Claude'
         return 'unknown'
 
-    @staticmethod
-    def _get_capabilities_from_model(model_name: str) -> List[str]:
-        """Determine model capabilities from name"""
-        capabilities = ['text-generation']
-        if any(x in model_name.lower() for x in ['gpt-4', 'gpt-3.5', 'claude']):
-            capabilities.extend(['chat', 'function-calling'])
-        return capabilities
+class LangsmithIngestor(BaseIngestor):
+    def __init__(self, config, save_debug_data=True, processing_dir=None):
+        self.connector = LangSmithConnector(config)
+        self.save_debug_data = save_debug_data
+        self.processing_dir = processing_dir
+
+    def fetch_data(self):
+        raw_data = self.connector.get_runs()
+        if self.save_debug_data and self.processing_dir:
+            raw_data_path = self.processing_dir / 'langsmith_api_output.json'
+            with open(raw_data_path, 'w') as f:
+                # Assuming that LLMRun has a method to_dict() or similar
+                json.dump([run.__dict__ for run in raw_data], f, indent=2)
+        return raw_data
+
+    def process_data(self, raw_data):
+        processed_data = []
+        for run in raw_data:
+            mce = self._convert_run_to_mce(run)
+            processed_data.append(mce)
+        if self.save_debug_data and self.processing_dir:
+            processed_data_path = self.processing_dir / 'mce_output.json'
+            with open(processed_data_path, 'w') as f:
+                json.dump(processed_data, f, indent=2)
+        return processed_data
+
+    def emit_data(self, processed_data):
+        # Emit processed data, e.g., save to file or send to DataHub
+        for mce in processed_data:
+            # Implement emission logic
+            pass  # Replace with actual emission code
+
+    def _convert_run_to_mce(self, run):
+        # Implement the conversion logic from LLMRun to MCE
+        mce = {
+            "id": run.id,
+            "metrics": run.metrics,
+            "metadata": run.metadata,
+            # Add additional fields as needed
+        }
+        return mce
