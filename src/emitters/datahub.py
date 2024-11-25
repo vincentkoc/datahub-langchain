@@ -25,8 +25,12 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
     """DataHub REST emitter with enhanced authentication and error handling"""
 
     def __init__(self, gms_server: str, token: Optional[str] = None, debug: bool = False):
-        super().__init__(gms_server=gms_server)
+        # Initialize without calling parent's __init__ to avoid header conflicts
+        self._gms_server = gms_server
         self.debug = debug
+
+        # Create new session
+        self._session = requests.Session()
 
         # Configure retry strategy
         retry_strategy = Retry(
@@ -40,16 +44,35 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
         self._session.mount("https://", adapter)
         self._session.timeout = 5
 
-        # Set up authentication and headers
-        self._session.headers.update({
-            "Authorization": f"Bearer {token}" if token else "",
-            "Content-Type": "application/json",
-            "X-RestLi-Protocol-Version": "2.0.0",
-            "Accept": "application/json"
-        })
+        # Clear any existing headers
+        self._session.headers.clear()
+
+        # Set minimal headers exactly matching the working curl command
+        headers = {
+            "Accept": "*/*",
+            "User-Agent": "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0)"
+        }
+
+        if token:
+            # Clean up token
+            token = token.strip().strip("'").strip('"')
+
+            if self.debug:
+                self._debug("Token length:", len(token))
+                self._debug("Token first 20 chars:", token[:20])
+                self._debug("Token last 20 chars:", token[-20:])
+
+            headers["Authorization"] = f"Bearer {token}"
+
+        self._session.headers.update(headers)
 
         if self.debug:
-            self._debug("Session headers after auth setup:", dict(self._session.headers))
+            self._debug("Session headers after setup:", dict(self._session.headers))
+            if token:
+                auth_header = self._session.headers.get("Authorization", "")
+                self._debug("Authorization header length:", len(auth_header))
+                self._debug("Authorization header first 50 chars:", auth_header[:50])
+                self._debug("Authorization header last 50 chars:", auth_header[-50:])
 
     def emit(self, *events: MetadataChangeEventClass) -> None:
         """Override emit to add debugging and proper request formatting"""
@@ -59,27 +82,57 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
         try:
             for event in events:
                 url = f"{self._gms_server}/entities?action=ingest"
-                headers = {
-                    "X-RestLi-Protocol-Version": "2.0.0",
-                    "Content-Type": "application/json"
-                }
 
-                # Prepare the payload according to DataHub's API requirements
+                # Add Content-Type header for the POST request
+                headers = {"Content-Type": "application/json"}
+
+                # Get the event object and extract the snapshot
+                event_obj = event.to_obj()
+                if "proposedSnapshot" not in event_obj:
+                    raise ValueError("Event object must contain proposedSnapshot")
+
+                snapshot = event_obj["proposedSnapshot"]
+
+                # The snapshot type should be the first key in the snapshot dict
+                snapshot_type = next(iter(snapshot.keys()))
+
+                # Convert namespace to match the working version
+                corrected_type = "com.linkedin.metadata.snapshot.DatasetSnapshot"
+                if "MLModel" in snapshot_type:
+                    corrected_type = "com.linkedin.metadata.snapshot.MLModelSnapshot"
+
+                # Format payload according to DataHub's expected schema
                 payload = {
                     "entity": {
-                        "value": event.to_obj()
+                        "value": {
+                            corrected_type: {
+                                "urn": snapshot[snapshot_type]["urn"],
+                                "aspects": [
+                                    {
+                                        "com.linkedin.common.DatasetProperties" if "Dataset" in snapshot_type
+                                        else "com.linkedin.common.MLModelProperties": aspect
+                                    }
+                                    for aspect_obj in snapshot[snapshot_type]["aspects"]
+                                    for aspect_type, aspect in aspect_obj.items()
+                                    if "Properties" in aspect_type
+                                ]
+                            }
+                        }
                     }
                 }
 
                 if self.debug:
                     self._debug("Request URL:", url)
+                    self._debug("Request headers:", headers)
                     self._debug("Request payload:", payload)
 
                 response = self._session.post(url, json=payload, headers=headers)
 
                 if self.debug:
                     self._debug("Response status:", response.status_code)
-                    self._debug("Response body:", response.text)
+                    self._debug("Response headers:", dict(response.headers))
+                    if response.text:
+                        self._debug("Response body:", response.text)
 
                 if response.status_code != 200:
                     response.raise_for_status()
@@ -94,7 +147,11 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
         if self.debug:
             print(f"\n=== DEBUG: {msg} ===")
             for arg in args:
-                print(json.dumps(arg, default=str, indent=2))
+                if isinstance(arg, dict):
+                    # Ensure full output of long strings
+                    print(json.dumps(arg, default=str, indent=2, ensure_ascii=False))
+                else:
+                    print(json.dumps(arg, default=str, ensure_ascii=False))
 
     def _debug_error(self, e: Exception) -> None:
         """Print detailed error information in debug mode"""
@@ -105,7 +162,7 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
         if hasattr(e, 'response'):
             self._debug("Response Details",
                 f"Status: {e.response.status_code}",
-                f"Headers: {e.response.headers}",
+                f"Headers: {dict(e.response.headers)}",
                 f"Body: {e.response.text}"
             )
 
