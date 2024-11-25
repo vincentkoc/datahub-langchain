@@ -8,14 +8,18 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 from datahub.emitter.rest_emitter import DatahubRestEmitter
-from datahub.emitter.mce_builder import make_dataset_urn, make_ml_model_urn
+from datahub.emitter.mce_builder import make_dataset_urn, make_ml_model_urn, make_tag_urn
 from datahub.metadata.schema_classes import (
-    DatasetPropertiesClass,
     MLModelPropertiesClass,
-    StatusClass,
+    MLModelKeyClass,
+    MLHyperParamClass,
+    MLMetricClass,
+    DatasetPropertiesClass,
     MetadataChangeEventClass,
     DatasetSnapshotClass,
     MLModelSnapshotClass,
+    GlobalTagsClass,
+    TagAssociationClass,
 )
 
 from ..base import LLMMetadataEmitter, LLMModel, LLMRun, LLMChain
@@ -208,9 +212,10 @@ class DataHubEmitter(LLMMetadataEmitter):
     def emit_model(self, model: LLMModel) -> str:
         """Emit model metadata to DataHub"""
         try:
+            model_name = f"{model.provider}/{model.name}"
             model_urn = make_ml_model_urn(
                 platform=self.platform,
-                name=f"{model.provider}/{model.name}",
+                model_name=model_name,
                 env="PROD"
             )
 
@@ -219,22 +224,42 @@ class DataHubEmitter(LLMMetadataEmitter):
                     print(f"\n⚠ Model already emitted: {model.name}")
                 return model_urn
 
-            properties = {
-                "provider": str(model.provider),
-                "model_family": str(model.model_family),
-                "capabilities": str(model.capabilities),
-                "parameters": str(model.parameters),
-                "metadata": str(model.metadata)
+            # Create MLModelProperties aspect with correct namespace
+            properties_aspect = {
+                "com.linkedin.ml.metadata.MLModelProperties": {
+                    "description": f"{model.provider} {model.name} Language Model",
+                    "type": model.model_family,
+                    "customProperties": {
+                        "provider": str(model.provider),
+                        "model_family": str(model.model_family),
+                        "capabilities": str(model.capabilities),
+                        "parameters": str(model.parameters),
+                        "metadata": str(model.metadata)
+                    },
+                    "hyperParameters": [
+                        {"key": k, "value": str(v)}
+                        for k, v in model.parameters.items()
+                    ] if model.parameters else [],
+                    "tags": model.capabilities
+                }
+            }
+
+            # Create tags aspect with correct namespace
+            tags_aspect = {
+                "com.linkedin.metadata.snapshot.MLModelSnapshot.tags": {
+                    "tags": [
+                        {"tag": make_tag_urn(tag)}
+                        for tag in model.capabilities
+                    ]
+                }
             }
 
             mce = MetadataChangeEventClass(
                 proposedSnapshot=MLModelSnapshotClass(
                     urn=model_urn,
                     aspects=[
-                        MLModelPropertiesClass(
-                            description=f"{model.provider} {model.name} Language Model",
-                            customProperties=properties
-                        )
+                        properties_aspect,
+                        tags_aspect
                     ]
                 )
             )
@@ -246,7 +271,9 @@ class DataHubEmitter(LLMMetadataEmitter):
         except Exception as e:
             if self.debug:
                 print(f"\n✗ Failed to emit model {model.name}: {e}")
-            raise
+            if self.hard_fail:
+                raise
+            return ""
 
     def emit_run(self, run: LLMRun) -> str:
         """Emit run metadata to DataHub"""
