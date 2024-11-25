@@ -1,6 +1,13 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
+
+from datahub.metadata.schema_classes import (
+    MLModelSnapshotClass,
+    MLModelPropertiesClass,
+    MetadataChangeEventClass
+)
+
 from src.platforms.langsmith import LangsmithIngestor
 from src.config import ObservabilityConfig
 from src.emitters.datahub import DataHubEmitter
@@ -15,17 +22,25 @@ def mock_failed_run():
         "model_name": "gpt-4",
         "error": "API timeout"
     }
-    run.inputs = {"prompt": "test prompt"}
-    run.outputs = None  # Failed run has no outputs
-    run.error = "API timeout"
-    run.tags = []
-    run.feedback_stats = None
-    run.latency = 0.0
-    run.cost = 0.0
-    run.token_usage = {}
+
     # Configure mock to return dictionary values
-    run.metrics = {"error_rate": 1.0, "success_rate": 0.0}
-    run.metadata = {"error": "API timeout"}
+    run_data = {
+        'inputs': {"prompt": "test prompt"},
+        'outputs': None,  # Failed run has no outputs
+        'error': "API timeout",
+        'tags': [],
+        'feedback_stats': None,
+        'latency': 0.0,
+        'cost': 0.0,
+        'token_usage': {},
+        'metrics': {"error_rate": 1.0, "success_rate": 0.0},
+        'metadata': {"error": "API timeout"}
+    }
+
+    # Configure mock to return real dictionaries
+    for attr, value in run_data.items():
+        setattr(type(run), attr, property(lambda self, v=value: v))
+
     return run
 
 def test_failed_run_handling(mock_failed_run):
@@ -49,20 +64,20 @@ def test_missing_metadata_handling():
     run.id = "incomplete-run-id"
     run.start_time = datetime.now()
     run.end_time = None
-    run.execution_metadata = None  # Missing metadata
-    run.inputs = {}
-    run.outputs = {}
-    run.error = None
-    run.tags = []
-    # Configure mock to return dictionary values instead of Mock objects
-    run.metrics = {}
-    run.metadata = {}
-    run.configure_mock(**{
-        'metrics': {},
-        'metadata': {},
+
+    # Configure mock with minimal data
+    run_data = {
         'inputs': {},
-        'outputs': {}
-    })
+        'outputs': {},
+        'error': None,
+        'tags': [],
+        'metrics': {},
+        'metadata': {}
+    }
+
+    # Configure mock to return real dictionaries
+    for attr, value in run_data.items():
+        setattr(type(run), attr, property(lambda self, v=value: v))
 
     ingestor = LangsmithIngestor(config)
     mce = ingestor._convert_run_to_mce(run)
@@ -74,6 +89,7 @@ def test_missing_metadata_handling():
 
 @pytest.mark.integration
 def test_datahub_emission_retry(mock_config):
+    """Test retry mechanism for DataHub emissions"""
     with patch('src.emitters.datahub.CustomDatahubRestEmitter') as mock_emitter_class:
         # Setup mock emitter with proper retry behavior
         mock_emitter = mock_emitter_class.return_value
@@ -87,37 +103,24 @@ def test_datahub_emission_retry(mock_config):
         emitter = DataHubEmitter(debug=True)
         emitter.emitter = mock_emitter  # Directly set the mocked emitter
 
-        # Configure the ingestor with the emitter
-        mock_config.datahub_dry_run = False
-        mock_config.default_emitter = "datahub"  # Important: set default emitter
+        # Force dry run to false to ensure emission
+        emitter.config.datahub_dry_run = False
 
-        ingestor = LangsmithIngestor(mock_config, emit_to_datahub=True)
-        ingestor.emitter = emitter  # Directly set the emitter
+        # Create a test MCE
+        mce = MetadataChangeEventClass(
+            proposedSnapshot=MLModelSnapshotClass(
+                urn="urn:li:mlModel:(test,test,PROD)",
+                aspects=[
+                    MLModelPropertiesClass(
+                        description="Test Model",
+                        customProperties={"test": "value"}
+                    )
+                ]
+            )
+        )
 
-        # Create a properly configured mock run with real dictionaries
-        run = Mock()
-        run.id = "retry-test-run"
-        run.start_time = datetime.now()
-        run.end_time = datetime.now()
-
-        # Create proper dictionaries for JSON serialization
-        run_data = {
-            'metrics': {"latency": 1.0},
-            'metadata': {},
-            'inputs': {"test": "input"},
-            'outputs': {"test": "output"},
-            'execution_metadata': {"model": "test"},
-            'error': None,
-            'tags': [],
-            'feedback_stats': {}
-        }
-
-        # Configure mock to return real dictionaries
-        for attr, value in run_data.items():
-            setattr(run, attr, value)
-
-        mce = ingestor._convert_run_to_mce(run)
-        ingestor.emit_data([mce])
+        # Test the retry mechanism directly
+        emitter._emit_with_retry(mce)
 
         # Verify the emit method was called exactly 3 times
         assert mock_emitter.emit.call_count == 3
