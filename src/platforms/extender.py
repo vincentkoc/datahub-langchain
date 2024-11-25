@@ -3,23 +3,21 @@ import requests
 from typing import Optional, Dict, List
 from ..config import ObservabilityConfig
 
-# Define all supported platforms
+# Define all supported platforms with valid DataHub fields only
 SUPPORTED_PLATFORMS: List[Dict] = [
     {
         "name": "LangChain",
         "displayName": "LangChain",
         "type": "OTHERS",
-        "logoUrl": "https://assets.streamlinehq.com/image/private/w_300,h_300,ar_1/f_auto/v1/icons/logos/langchain-ipuhh4qo1jz5ssl4x0g2a.png/langchain-dp1uxj2zn3752pntqnpfu2.png?_a=DAJFJtWIZAAC",
-        "info": "LangChain Framework for LLM Applications",
-        "category": "ML_FRAMEWORK"
+        "datasetNameDelimiter": "/",
+        "logoUrl": "https://assets.streamlinehq.com/image/private/w_300,h_300,ar_1/f_auto/v1/icons/logos/langchain-ipuhh4qo1jz5ssl4x0g2a.png/langchain-dp1uxj2zn3752pntqnpfu2.png?_a=DAJFJtWIZAAC"
     },
     {
         "name": "LangSmith",
         "displayName": "LangSmith",
         "type": "OTHERS",
-        "logoUrl": "https://assets.streamlinehq.com/image/private/w_300,h_300,ar_1/f_auto/v1/icons/logos/langsmith-ipuhh4qo1jz5ssl4x0g2a.png/langsmith-dp1uxj2zn3752pntqnpfu2.png?_a=DAJFJtWIZAAC",
-        "info": "LangSmith Observability Platform",
-        "category": "OBSERVABILITY"
+        "datasetNameDelimiter": "/",
+        "logoUrl": "https://assets.streamlinehq.com/image/private/w_300,h_300,ar_1/f_auto/v1/icons/logos/langchain-ipuhh4qo1jz5ssl4x0g2a.png/langchain-dp1uxj2zn3752pntqnpfu2.png?_a=DAJFJtWIZAAC"
     }
 ]
 
@@ -45,14 +43,11 @@ class DataHubPlatformExtender:
                         "aspects": [
                             {
                                 "com.linkedin.dataplatform.DataPlatformInfo": {
-                                    "datasetNameDelimiter": "/",
+                                    "datasetNameDelimiter": platform_info.get("datasetNameDelimiter", "/"),
                                     "name": platform_info["name"],
                                     "displayName": platform_info["displayName"],
                                     "type": platform_info.get("type", "OTHERS"),
-                                    "logoUrl": platform_info.get("logoUrl", ""),
-                                    "info": platform_info.get("info", ""),
-                                    "platform": platform_info["name"].lower(),
-                                    "category": platform_info.get("category", "OTHERS")
+                                    "logoUrl": platform_info.get("logoUrl", "")
                                 }
                             }
                         ]
