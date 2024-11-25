@@ -31,7 +31,11 @@ def main():
             gms_server="http://localhost:8080",
             debug=True
         )
-        observer = LangChainObserver(config=config, emitter=emitter)
+        observer = LangChainObserver(
+            config=config,
+            emitter=emitter,
+            group_models=False
+        )
 
         # Initialize LangChain components
         llm = ChatOpenAI(
