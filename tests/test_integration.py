@@ -9,60 +9,106 @@ from datahub.metadata.schema_classes import (
     DatasetSnapshotClass,
     DatasetPropertiesClass
 )
+import json
 
 @pytest.mark.integration
 def test_full_ingestion_flow(tmp_path, mock_config, mock_langsmith_run):
     """Test the complete ingestion flow with mocked external services"""
 
+    # Create proper mock data that's JSON serializable
+    current_time = datetime.now()
+    run_data = {
+        'metrics': {
+            "latency": 1.0,
+            "token_usage": {"total": 100},
+            "cost": 0.001
+        },
+        'metadata': {"test": "metadata"},
+        'inputs': {"prompt": "test"},
+        'outputs': {"response": "test"},
+        'id': "test-run-id",
+        'start_time': current_time,
+        'end_time': current_time,
+        'error': None,
+        'tags': [],
+        'feedback_stats': {}
+    }
+
+    # Configure mock to return real values instead of Mock objects
+    for attr, value in run_data.items():
+        setattr(mock_langsmith_run, attr, value)  # Set directly on mock object
+
     with patch('langsmith.Client') as mock_client_class:
-        # Create a fresh mock client for this test
-        mock_client = MagicMock()
-        mock_client_class.return_value = mock_client
+        mock_client = mock_client_class.return_value
 
-        # Mock the session
-        mock_session = MagicMock()
-        mock_session.id = "test-session"
-        mock_session.name = "default"
+        # Mock the list_runs method to return our mock run directly
+        mock_client.list_runs = MagicMock(return_value=[mock_langsmith_run])
 
-        # Configure client responses
-        mock_client.list_sessions.return_value = [mock_session]
-        mock_client.read_session.return_value = mock_session
-        mock_client.list_runs.return_value = [mock_langsmith_run]
-        mock_client.list_projects.return_value = [{"name": "test-project"}]
-        mock_client.read_project.return_value = {"name": "test-project"}
+        # Mock other methods to avoid 403 errors
+        mock_client.list_projects = MagicMock(return_value=[{"name": "test-project"}])
+        mock_client.read_project = MagicMock(return_value={"name": "test-project"})
+        mock_client.list_sessions = MagicMock(return_value=[])  # Empty list is fine
 
         # Ensure no side effects
         mock_client.list_runs.side_effect = None
         mock_client.list_sessions.side_effect = None
 
-        # Initialize components
-        connector = LangSmithConnector(mock_config)
-        connector.client = mock_client
-        connector.project_name = "test-project"
+        # Create and verify processing directory
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        assert tmp_path.exists(), f"Processing directory not created: {tmp_path}"
 
+        # Initialize components with explicit debug settings
         ingestor = LangsmithIngestor(
-            mock_config,
-            save_debug_data=True,
+            config=mock_config,
+            save_debug_data=True,  # Explicitly set to True
             processing_dir=tmp_path,
             emit_to_datahub=True
         )
+
+        # Verify ingestor configuration
+        assert ingestor.save_debug_data is True, "save_debug_data not set correctly"
+        assert ingestor.processing_dir == tmp_path, "processing_dir not set correctly"
+
+        # Set up the ingestor's client and connector
         ingestor.client = mock_client
         ingestor.project_name = "test-project"
+        ingestor.connector.client = mock_client  # Important: set client on the connector too
+        ingestor.connector.project_name = "test-project"
 
-        # Test data collection
-        runs = connector.get_runs(
-            start_time=datetime.now() - timedelta(days=1),
-            end_time=datetime.now()
-        )
-        assert len(runs) == 1
+        # Test data collection using fetch_data
+        raw_data = ingestor.fetch_data()  # This will create the debug file
 
-        # Test data processing
-        processed_data = ingestor.process_data(runs)
-        assert len(processed_data) == 1
+        # Debug output if the assertion fails
+        if len(raw_data) != 1:
+            print(f"\nMock client list_runs called: {mock_client.list_runs.called}")
+            print(f"Mock client list_runs return value: {mock_client.list_runs.return_value}")
+            print(f"Raw data: {raw_data}")
+
+        assert len(raw_data) == 1, "Expected one run in raw_data"
+
+        # Test data processing with debug output
+        processed_data = ingestor.process_data(raw_data)
+        assert len(processed_data) == 1, "Expected one item in processed_data"
 
         # Verify debug data was saved
-        assert (tmp_path / "langsmith_api_output.json").exists()
-        assert (tmp_path / "mce_output.json").exists()
+        debug_file = tmp_path / "langsmith_api_output.json"
+        if not debug_file.exists():
+            print(f"\nDebug directory contents: {list(tmp_path.iterdir())}")
+            print(f"Ingestor config: save_debug_data={ingestor.save_debug_data}, processing_dir={ingestor.processing_dir}")
+            print(f"Raw data length: {len(raw_data)}")
+            print(f"Raw data first item: {raw_data[0].__dict__ if raw_data else None}")
+
+        assert debug_file.exists(), f"Debug file not found at {debug_file}"
+
+        # Verify file contents
+        with open(debug_file, 'r') as f:
+            debug_data = json.load(f)
+            assert len(debug_data) == 1, "Expected one item in debug_data"
+            assert debug_data[0]['id'] == "test-run-id"
+
+        # Verify MCE output
+        mce_file = tmp_path / "mce_output.json"
+        assert mce_file.exists(), f"MCE file not found at {mce_file}"
 
 @pytest.mark.integration
 def test_datahub_connection():

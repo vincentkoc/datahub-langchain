@@ -207,12 +207,48 @@ class LangsmithIngestor(BaseIngestor):
             self.json_emitter = None
 
     def fetch_data(self):
+        """Fetch data and save debug output if enabled"""
         raw_data = self.connector.get_runs()
+
         if self.save_debug_data and self.processing_dir:
-            raw_data_path = self.processing_dir / 'langsmith_api_output.json'
-            with open(raw_data_path, 'w') as f:
-                # Ensure that LLMRun objects are serializable
-                json.dump([run.to_dict() for run in raw_data], f, indent=2)
+            try:
+                # Ensure processing directory exists
+                self.processing_dir.mkdir(parents=True, exist_ok=True)
+
+                raw_data_path = self.processing_dir / 'langsmith_api_output.json'
+
+                # Convert runs to serializable format with better error handling
+                serializable_data = []
+                for run in raw_data:
+                    try:
+                        run_dict = {
+                            'id': str(getattr(run, 'id', '')),
+                            'start_time': getattr(run, 'start_time', '').isoformat() if getattr(run, 'start_time', None) else '',
+                            'end_time': getattr(run, 'end_time', '').isoformat() if getattr(run, 'end_time', None) else '',
+                            'metrics': dict(getattr(run, 'metrics', {})),
+                            'inputs': dict(getattr(run, 'inputs', {})),
+                            'outputs': dict(getattr(run, 'outputs', {})),
+                            'metadata': dict(getattr(run, 'metadata', {})),
+                            'error': str(getattr(run, 'error', '')),
+                            'tags': list(getattr(run, 'tags', [])),
+                            'feedback_stats': dict(getattr(run, 'feedback_stats', {}))
+                        }
+                        serializable_data.append(run_dict)
+                    except Exception as e:
+                        print(f"Warning: Failed to serialize run data: {e}")
+                        continue
+
+                # Write to file with proper encoding and error handling
+                try:
+                    with open(raw_data_path, 'w', encoding='utf-8') as f:
+                        json.dump(serializable_data, f, indent=2, default=str)
+                    print(f"Debug data saved to {raw_data_path}")
+                except Exception as e:
+                    print(f"Error writing debug file: {e}")
+
+            except Exception as e:
+                print(f"Warning: Failed to save debug data: {e}")
+
         return raw_data
 
     def process_data(self, raw_data):
@@ -244,35 +280,62 @@ class LangsmithIngestor(BaseIngestor):
             # Convert MCEs to serializable dictionaries
             self.json_emitter.emit([mce.to_obj() for mce in processed_data], 'processed_data.json')
 
-    def _convert_run_to_mce(self, run):
-        # Create URN for the run
-        run_urn = f"urn:li:dataset:(urn:li:dataPlatform:langsmith,runs/{run.id},PROD)"
+    def _convert_run_to_mce(self, run) -> MetadataChangeEventClass:
+        """Convert LangSmith run to DataHub MCE with proper JSON handling"""
+        try:
+            # Helper function to safely convert values to JSON
+            def safe_json_dumps(value, default=None):
+                if value is None:
+                    return json.dumps(default)
+                try:
+                    # Handle Mock objects by getting their return value
+                    if hasattr(value, '_mock_return_value'):
+                        value = value._mock_return_value
+                    # Convert to dict if possible
+                    if hasattr(value, '__dict__'):
+                        value = value.__dict__
+                    return json.dumps(value)
+                except (TypeError, AttributeError):
+                    return json.dumps(default)
 
-        # Construct custom properties
-        custom_properties = {
-            "run_id": str(run.id),
-            "start_time": run.start_time.isoformat(),
-            "end_time": run.end_time.isoformat() if run.end_time else "",
-            "inputs": json.dumps(run.inputs) if run.inputs else "{}",
-            "outputs": json.dumps(run.outputs) if run.outputs else "{}",
-            "metrics": json.dumps(run.metrics) if run.metrics else "{}",
-            "metadata": json.dumps(run.metadata) if run.metadata else "{}",
-        }
+            # Helper function to safely get datetime
+            def safe_datetime(dt_value):
+                if dt_value is None:
+                    return ""
+                if isinstance(dt_value, datetime):
+                    return dt_value.isoformat()
+                return ""
 
-        # Create MCE
-        mce = MetadataChangeEventClass(
-            proposedSnapshot=DatasetSnapshotClass(
-                urn=run_urn,
-                aspects=[
-                    DatasetPropertiesClass(
-                        name=f"LLM Run {run.id}",
-                        description=f"Run ID: {run.id}",
-                        customProperties=custom_properties,
-                    )
-                ],
+            # Safely extract and convert run attributes
+            run_attributes = {
+                "run_id": str(getattr(run, 'id', '')),
+                "start_time": safe_datetime(getattr(run, 'start_time', None)),
+                "end_time": safe_datetime(getattr(run, 'end_time', None)),
+                "metrics": safe_json_dumps(getattr(run, 'metrics', {}), default={}),
+                "inputs": safe_json_dumps(getattr(run, 'inputs', {}), default={}),
+                "outputs": safe_json_dumps(getattr(run, 'outputs', {}), default={}),
+                "metadata": safe_json_dumps(getattr(run, 'metadata', {}), default={})
+            }
+
+            # Create URN for the run
+            run_urn = f"urn:li:dataset:(urn:li:dataPlatform:langsmith,runs/{run_attributes['run_id']},PROD)"
+
+            # Create MCE
+            return MetadataChangeEventClass(
+                proposedSnapshot=DatasetSnapshotClass(
+                    urn=run_urn,
+                    aspects=[
+                        DatasetPropertiesClass(
+                            name=f"LLM Run {run_attributes['run_id']}",
+                            description=f"Run ID: {run_attributes['run_id']}",
+                            customProperties=run_attributes
+                        )
+                    ]
+                )
             )
-        )
-        return mce
+        except Exception as e:
+            print(f"Error converting run to MCE: {e}")
+            raise
 
     def process_models(self, models):
         # Process models if any additional processing is needed

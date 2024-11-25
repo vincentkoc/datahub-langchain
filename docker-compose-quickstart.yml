@@ -237,7 +237,7 @@ services:
   mysql:
     networks:
       - datahub_network
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin --default-authentication-plugin=mysql_native_password
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_bin
     environment:
     - MYSQL_DATABASE=datahub
     - MYSQL_USER=datahub

@@ -22,20 +22,40 @@ def main():
         raise ValueError("OPENAI_API_KEY environment variable is not set")
 
     try:
-        # Setup observation
+        # Setup observation with debug mode
         config = ObservabilityConfig(
             langchain_verbose=True,
-            langchain_handler="default"
+            langchain_handler="default",
+            datahub_dry_run=False  # Set to True to skip actual DataHub ingestion
         )
+
+        # Initialize emitter with debug mode
         emitter = DataHubEmitter(
             gms_server="http://localhost:8080",
             debug=True
         )
-        observer = LangChainObserver(config=config, emitter=emitter)
+
+        # Register platforms before using them
+        try:
+            emitter.register_platforms()
+        except Exception as e:
+            print(f"Warning: Platform registration failed: {e}")
+            print("Continuing with execution...")
+
+        # Create pipeline name
+        pipeline_name = "langchain_basic"
+
+        observer = LangChainObserver(
+            config=config,
+            emitter=emitter,
+            pipeline_name=pipeline_name,
+            group_models=False
+        )
 
         # Initialize LangChain components
         llm = ChatOpenAI(
-            callbacks=[observer]  # Add observer
+            callbacks=[observer],
+            model_name="gpt-3.5-turbo"
         )
 
         prompt = ChatPromptTemplate.from_messages([
@@ -48,10 +68,11 @@ def main():
 
         # Run with observation
         result = chain.invoke({"input": "Tell me a joke"})
-        print(result)
+        print(f"\nResponse: {result.content}")
 
     except Exception as e:
         print(f"An error occurred: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main()
