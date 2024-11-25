@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import uuid
 
@@ -19,18 +19,139 @@ from ..models import Prompt, Metrics, Tool
 from ..config import ObservabilityConfig
 from ..utils.model_utils import get_capabilities_from_model, get_provider_from_model, get_model_family, get_model_parameters, normalize_model_name
 
+# Add DataHub specific imports
+from datahub.metadata.schema_classes import (
+    MLModelSnapshotClass,
+    MLModelPropertiesClass,
+    GlobalTagsClass,
+    TagAssociationClass,
+    MLModelKeyClass,
+    MLHyperParamClass
+)
+
 class LangChainConnector(LLMPlatformConnector):
     """Connector for LangChain framework"""
 
-    def __init__(self, group_models: bool = False):
-        self.observed_models = {}
+    def __init__(self, group_models: bool = True):  # Default to True for hierarchical structure
+        self.observed_model_groups = {}  # Track model groups
+        self.observed_model_runs = {}    # Track model runs
         self.observed_chains = {}
         self.observed_prompts = {}
-        self.group_models = group_models  # Add flag to control model grouping
+        self.group_models = group_models
+
+    def create_model_hierarchy(self, model: Any) -> Tuple[MLModelSnapshotClass, MLModelSnapshotClass]:
+        """Create model group and model instance hierarchy using available classes"""
+        # Extract model info
+        model_info = self._create_model_from_langchain(model)
+        group_id = f"{model_info.provider}_{model_info.model_family}"
+
+        # Create "group" as a special model instance
+        group = MLModelSnapshotClass(
+            urn=f"urn:li:mlModel:(urn:li:dataPlatform:llm,{group_id},PROD)",
+            aspects=[
+                MLModelPropertiesClass(
+                    description=f"LLM Group for {model_info.model_family} models from {model_info.provider}",
+                    type="Model Group",  # Use type to identify as group
+                    customProperties={
+                        "provider": model_info.provider,
+                        "model_family": model_info.model_family,
+                        "capabilities": str(model_info.capabilities),
+                        "is_group": "true"  # Add flag to identify groups
+                    }
+                ),
+                GlobalTagsClass(
+                    tags=[
+                        TagAssociationClass(tag=f"urn:li:tag:{cap}")
+                        for cap in model_info.capabilities
+                    ]
+                )
+            ]
+        )
+
+        # Create model instance
+        instance = MLModelSnapshotClass(
+            urn=f"urn:li:mlModel:(urn:li:dataPlatform:llm,{model_info.name},PROD)",
+            aspects=[
+                MLModelPropertiesClass(
+                    description=model_info.metadata.get("description", ""),
+                    type="Language Model",
+                    customProperties={
+                        **model_info.metadata,
+                        **model_info.parameters,
+                        "group_urn": group.urn  # Reference to parent group
+                    }
+                ),
+                GlobalTagsClass(
+                    tags=[
+                        TagAssociationClass(tag=f"urn:li:tag:{cap}")
+                        for cap in model_info.capabilities
+                    ]
+                )
+            ]
+        )
+
+        return group, instance
+
+    def register_model(self, model: Any) -> None:
+        """Register a LangChain model with hierarchical structure"""
+        group, instance = self.create_model_hierarchy(model)
+
+        # Store both group and instance
+        group_id = group.urn.split(":")[-1]
+        if group_id not in self.observed_model_groups:
+            self.observed_model_groups[group_id] = group
+
+        instance_id = instance.urn.split(":")[-1]
+        self.observed_model_runs[instance_id] = instance
 
     def get_models(self) -> List[LLMModel]:
         """Get observed LangChain models"""
-        return list(self.observed_models.values())
+        # Return both groups and instances
+        models = []
+        for group in self.observed_model_groups.values():
+            models.append(self._convert_group_to_model(group))
+        for instance in self.observed_model_runs.values():
+            models.append(self._convert_instance_to_model(instance))
+        return models
+
+    def _convert_group_to_model(self, group: MLModelSnapshotClass) -> LLMModel:
+        """Convert MLModelSnapshot to LLMModel"""
+        # Get properties from the first aspect (MLModelPropertiesClass)
+        props = next((aspect for aspect in group.aspects if isinstance(aspect, MLModelPropertiesClass)), None)
+        if not props:
+            raise ValueError("Missing MLModelProperties aspect")
+
+        # Get tags from the second aspect (GlobalTagsClass)
+        tags = next((aspect for aspect in group.aspects if isinstance(aspect, GlobalTagsClass)), None)
+
+        return LLMModel(
+            name=group.urn.split(":")[-1],
+            provider=props.customProperties.get("provider", "unknown"),
+            model_family=props.customProperties.get("model_family", "unknown"),
+            capabilities=eval(props.customProperties.get("capabilities", "[]")),
+            parameters={},
+            metadata={"type": "model_group"}
+        )
+
+    def _convert_instance_to_model(self, instance: MLModelSnapshotClass) -> LLMModel:
+        """Convert MLModelSnapshot to LLMModel"""
+        # Get properties from the first aspect (MLModelPropertiesClass)
+        props = next((aspect for aspect in instance.aspects if isinstance(aspect, MLModelPropertiesClass)), None)
+        if not props:
+            raise ValueError("Missing MLModelProperties aspect")
+
+        # Get tags from the second aspect (GlobalTagsClass)
+        tags = next((aspect for aspect in instance.aspects if isinstance(aspect, GlobalTagsClass)), None)
+
+        return LLMModel(
+            name=instance.urn.split(":")[-1],
+            provider=props.customProperties.get("provider", "unknown"),
+            model_family=props.customProperties.get("model_family", "unknown"),
+            capabilities=[tag.tag.split(":")[-1] for tag in tags.tags] if tags else [],
+            parameters={k: v for k, v in props.customProperties.items()
+                       if k not in ["provider", "model_family", "group_urn"]},
+            metadata={"type": "model_instance"}
+        )
 
     def get_runs(self, **filters) -> List[LLMRun]:
         """Get run history - Note: LangChain doesn't store runs natively"""
@@ -39,16 +160,6 @@ class LangChainConnector(LLMPlatformConnector):
     def get_chains(self) -> List[LLMChain]:
         """Get observed LangChain chains"""
         return list(self.observed_chains.values())
-
-    def register_model(self, model: Any) -> None:
-        """Register a LangChain model"""
-        model_id = str(uuid.uuid4())
-        self.observed_models[model_id] = self._create_model_from_langchain(model)
-
-    def register_chain(self, chain: Any) -> None:
-        """Register a LangChain chain"""
-        chain_id = str(uuid.uuid4())
-        self.observed_chains[chain_id] = self._create_chain_from_langchain(chain)
 
     def _create_model_from_langchain(self, model: Any) -> LLMModel:
         """Create LLMModel from LangChain model"""
@@ -171,23 +282,37 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
         if self.config.langchain_verbose:
             print(f"\nStarting LLM run: {run_id}")
 
-        # Create and register model
-        model = self.connector._create_model_from_langchain(serialized)
-        model_id = f"{model.provider}/{model.name}"
+        # Create model info first
+        model_info = self.connector._create_model_from_langchain(serialized)
 
-        # Only emit model if we haven't seen it before
-        if model_id not in self.registered_models:
+        # Create and register model hierarchy
+        group, instance = self.connector.create_model_hierarchy(serialized)
+
+        # Get model family from properties
+        group_props = next((aspect for aspect in group.aspects
+                           if isinstance(aspect, MLModelPropertiesClass)), None)
+        group_id = group_props.customProperties.get("model_family", "unknown") if group_props else "unknown"
+
+        # Emit both group and instance if new
+        if group_id not in self.connector.observed_model_groups:
             if self.config.langchain_verbose:
-                print(f"Registering new model: {model_id}")
-            self.log_model(model)
-            self.registered_models.add(model_id)
+                print(f"Registering new model group: {group_id}")
+            self.emitter.emit_model_group(model_info)  # Pass the original model info
+            self.connector.observed_model_groups[group_id] = group
 
-        # Store model with run data
+        instance_id = instance.urn.split(":")[-1]
+        if instance_id not in self.connector.observed_model_runs:
+            if self.config.langchain_verbose:
+                print(f"Registering new model instance: {instance_id}")
+            self.emitter.emit_model(model_info)  # Pass the original model info
+            self.connector.observed_model_runs[instance_id] = instance
+
+        # Store run data
         self.active_runs[run_id] = {
             "start_time": datetime.now(),
             "prompts": prompts,
             "serialized": serialized,
-            "model": model  # Store the model object
+            "model_info": model_info  # Store the original model info
         }
 
         self.start_run(run_id)
@@ -211,7 +336,7 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
                 id=run_id,
                 start_time=run_data["start_time"],
                 end_time=datetime.now(),
-                model=run_data["model"],  # Use stored model object
+                model=run_data["model_info"],  # Use stored model object
                 inputs={"prompts": run_data["prompts"]},
                 outputs={"generations": [g.text for g in response.generations[0]]},
                 metrics=metrics.__dict__,
@@ -259,3 +384,27 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
     def log_chain(self, chain: LLMChain) -> None:
         """Log chain metadata"""
         self.emitter.emit_chain(chain)
+
+    def create_llm_hierarchy(self, model_name: str, run_id: str):
+        # Create model group
+        group = MLModelSnapshotClass(
+            urn=f"urn:li:mlModelGroup:(urn:li:dataPlatform:llm,{model_name},PROD)",
+            aspects=[
+                MLModelPropertiesClass(
+                    description=f"LLM Group for {model_name}"
+                )
+            ]
+        )
+
+        # Create run as model instance
+        run_model = MLModelSnapshotClass(
+            urn=f"urn:li:mlModel:(urn:li:dataPlatform:llm,{model_name}_run_{run_id},PROD)",
+            aspects=[
+                MLModelPropertiesClass(
+                    description=f"Run instance of {model_name}",
+                    groups=[group.urn]
+                )
+            ]
+        )
+
+        return group, run_model

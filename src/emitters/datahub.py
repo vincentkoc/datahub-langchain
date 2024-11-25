@@ -101,9 +101,7 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
                 snapshot_type = next(iter(snapshot.keys()))
 
                 # Convert namespace to match the working version
-                corrected_type = "com.linkedin.metadata.snapshot.DatasetSnapshot"
-                if "MLModel" in snapshot_type:
-                    corrected_type = "com.linkedin.metadata.snapshot.MLModelSnapshot"
+                corrected_type = "com.linkedin.metadata.snapshot.MLModelSnapshot"
 
                 # Format payload according to DataHub's expected schema
                 payload = {
@@ -113,15 +111,32 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
                                 "urn": snapshot[snapshot_type]["urn"],
                                 "aspects": [
                                     {
-                                        "com.linkedin.dataset.DatasetProperties": {
-                                            "customProperties": aspect["customProperties"],
-                                            "description": aspect["description"],
-                                            "tags": aspect.get("tags", [])
+                                        "com.linkedin.ml.metadata.MLModelProperties": {
+                                            "customProperties": aspect.get("customProperties", {}),
+                                            "description": aspect.get("description", ""),
+                                            "type": aspect.get("type", "Language Model"),
+                                            "hyperParams": [
+                                                {
+                                                    "name": param["name"],
+                                                    "value": param["value"]
+                                                }
+                                                for param in aspect.get("hyperParams", [])
+                                            ] if aspect.get("hyperParams") else []
+                                        }
+                                    }
+                                    if "Properties" in aspect_type
+                                    else {
+                                        "com.linkedin.common.GlobalTags": {
+                                            "tags": [
+                                                {
+                                                    "tag": tag["tag"]
+                                                }
+                                                for tag in aspect.get("tags", [])
+                                            ]
                                         }
                                     }
                                     for aspect_obj in snapshot[snapshot_type]["aspects"]
                                     for aspect_type, aspect in aspect_obj.items()
-                                    if "Properties" in aspect_type
                                 ]
                             }
                         }
@@ -209,6 +224,65 @@ class DataHubEmitter(LLMMetadataEmitter):
             if self.hard_fail or not self.config.datahub_dry_run:
                 raise
 
+    def emit_model_group(self, model: LLMModel) -> str:
+        """Emit model group metadata to DataHub"""
+        try:
+            # Create a model URN for the group
+            group_urn = make_ml_model_urn(
+                platform=self.platform,
+                model_name=f"group_{model.model_family}",
+                env="PROD"
+            )
+
+            if group_urn in self._successful_emissions:
+                if self.debug:
+                    print(f"\n⚠ Model group already successfully emitted: {model.model_family}")
+                return group_urn
+
+            # Create properties for the group
+            properties = MLModelPropertiesClass(
+                description=f"{model.provider} {model.model_family} Model Family",
+                type="Model Group",
+                customProperties={
+                    "provider": str(model.provider),
+                    "model_family": str(model.model_family),
+                    "group_type": "llm_family",
+                    "source": "langchain"
+                }
+            )
+
+            # Create tags for the group
+            tags = GlobalTagsClass(
+                tags=[
+                    TagAssociationClass(tag=f"urn:li:tag:{cap}")
+                    for cap in model.capabilities
+                ] if model.capabilities else []
+            )
+
+            # Create the metadata change event
+            mce = MetadataChangeEventClass(
+                proposedSnapshot=MLModelSnapshotClass(
+                    urn=group_urn,
+                    aspects=[properties, tags]
+                )
+            )
+
+            # Emit the metadata
+            self._emit_with_retry(mce)
+            self._successful_emissions.add(group_urn)
+
+            if self.debug:
+                print(f"\n✓ Successfully emitted model group: {model.model_family}")
+
+            return group_urn
+
+        except Exception as e:
+            if self.debug:
+                print(f"\n✗ Failed to emit model group {model.model_family}: {e}")
+            if self.hard_fail:
+                raise
+            return ""
+
     def emit_model(self, model: LLMModel) -> str:
         """Emit model metadata to DataHub"""
         try:
@@ -223,45 +297,51 @@ class DataHubEmitter(LLMMetadataEmitter):
                     print(f"\n⚠ Model already successfully emitted: {model.name}")
                 return model_urn
 
-            # Create MLModelProperties aspect
+            # Create properties with group reference if available
             properties = MLModelPropertiesClass(
-                description=model.metadata.get("description", f"{model.provider} {model.name} Language Model"),
-                type=model.model_family,
+                description=f"{model.provider} {model.name} Language Model",
+                type="Language Model",
                 customProperties={
                     "provider": str(model.provider),
                     "model_family": str(model.model_family),
                     "capabilities": str(model.capabilities),
                     "parameters": str(model.parameters),
                     "raw_name": model.metadata.get("raw_name", model.name),
-                    **model.metadata
+                    "source": "langchain"
                 },
-                hyperParameters=[
+                hyperParams=[
                     MLHyperParamClass(
-                        name=str(k),
+                        name=k,
                         value=str(v)
                     )
                     for k, v in model.parameters.items()
                 ] if model.parameters else None
             )
 
-            # Create tags aspect
+            # Create tags
             tags = GlobalTagsClass(
                 tags=[
-                    TagAssociationClass(tag=make_tag_urn(tag))
-                    for tag in model.capabilities
-                ]
+                    TagAssociationClass(tag=f"urn:li:tag:{cap}")
+                    for cap in model.capabilities
+                ] if model.capabilities else []
             )
 
+            # Create the metadata change event
             mce = MetadataChangeEventClass(
                 proposedSnapshot=MLModelSnapshotClass(
                     urn=model_urn,
-                    aspects=[
-                        properties,
-                        tags
-                    ]
+                    aspects=[properties, tags]
                 )
             )
 
+            # First emit the group if this model belongs to one
+            if model.model_family:
+                group_urn = self.emit_model_group(model)
+                # Add group relationship to properties if needed
+                if group_urn:
+                    properties.customProperties["group_urn"] = group_urn
+
+            # Emit the model
             self._emit_with_retry(mce)
             self._successful_emissions.add(model_urn)
 
@@ -280,36 +360,40 @@ class DataHubEmitter(LLMMetadataEmitter):
     def emit_run(self, run: LLMRun) -> str:
         """Emit run metadata to DataHub"""
         try:
-            properties = {
-                "run_id": str(run.id),
-                "inputs": str(run.inputs),
-                "outputs": str(run.outputs),
-                "metrics": str(run.metrics),
-                "start_time": str(run.start_time.isoformat()),
-                "end_time": str(run.end_time.isoformat() if run.end_time else None),
-                "parent_id": str(run.parent_id or "none"),
-                "model": str(run.model.name if run.model else "unknown"),
-                "status": "completed" if not run.metrics.get("error") else "failed"
-            }
-
-            run_urn = make_dataset_urn(
+            # Create a run URN using MLModel type instead of Dataset
+            run_urn = make_ml_model_urn(
                 platform=self.platform,
-                name=f"runs/{run.id}",
+                model_name=f"run_{run.id}",
                 env="PROD"
             )
 
+            # Create properties for the run
+            properties = MLModelPropertiesClass(
+                description=f"LLM Run {run.id}",
+                type="Run",  # Identify as a run
+                customProperties={
+                    "run_id": str(run.id),
+                    "inputs": str(run.inputs),
+                    "outputs": str(run.outputs),
+                    "metrics": str(run.metrics),
+                    "start_time": str(run.start_time.isoformat()),
+                    "end_time": str(run.end_time.isoformat() if run.end_time else None),
+                    "parent_id": str(run.parent_id or "none"),
+                    "model": str(run.model.name if run.model else "unknown"),
+                    "status": "completed" if not run.metrics.get("error") else "failed"
+                },
+                hyperParams=[]  # Empty list since runs don't have hyperparameters
+            )
+
+            # Create the metadata change event
             mce = MetadataChangeEventClass(
-                proposedSnapshot=DatasetSnapshotClass(
+                proposedSnapshot=MLModelSnapshotClass(
                     urn=run_urn,
-                    aspects=[
-                        DatasetPropertiesClass(
-                            description=f"LLM Run {run.id}",
-                            customProperties=properties
-                        )
-                    ]
+                    aspects=[properties]
                 )
             )
 
+            # Emit the metadata
             self._emit_with_retry(mce)
 
             # Emit lineage to model if available
@@ -328,7 +412,9 @@ class DataHubEmitter(LLMMetadataEmitter):
         except Exception as e:
             if self.debug:
                 print(f"\n✗ Failed to emit run {run.id}: {e}")
-            raise
+            if self.hard_fail:
+                raise
+            return ""
 
     def emit_chain(self, chain: LLMChain) -> str:
         """Emit chain metadata to DataHub"""
