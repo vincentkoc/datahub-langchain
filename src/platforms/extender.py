@@ -18,6 +18,20 @@ SUPPORTED_PLATFORMS: List[Dict] = [
         "type": "OTHERS",
         "datasetNameDelimiter": "/",
         "logoUrl": "https://assets.streamlinehq.com/image/private/w_300,h_300,ar_1/f_auto/v1/icons/logos/langchain-ipuhh4qo1jz5ssl4x0g2a.png/langchain-dp1uxj2zn3752pntqnpfu2.png?_a=DAJFJtWIZAAC"
+    },
+    {
+        "name": "Flowise",
+        "displayName": "Flowise",
+        "type": "OTHERS",
+        "datasetNameDelimiter": "/",
+        "logoUrl": "https://pbs.twimg.com/profile_images/1645548689757274113/dp5YMsvk_400x400.jpg"
+    },
+    {
+        "name": "ChromaDB",
+        "displayName": "ChromaDB",
+        "type": "OTHERS",
+        "datasetNameDelimiter": "/",
+        "logoUrl": "https://seeklogo.com/images/C/chroma-logo-FB287847E7-seeklogo.com.png"
     }
 ]
 
