@@ -347,3 +347,13 @@ class DataHubEmitter(LLMMetadataEmitter):
                 print(f"Target: {target_urn}")
                 print(f"Type: {lineage_type}")
             return
+
+    def emit(self, mce: MetadataChangeEventClass):
+        """Emit a MetadataChangeEvent to DataHub"""
+        try:
+            self.emitter.emit(mce)
+        except Exception as e:
+            if self.debug:
+                print(f"Error emitting MCE: {e}")
+            if self.hard_fail:
+                raise
