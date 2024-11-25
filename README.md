@@ -1,7 +1,14 @@
-# LangChain DataHub Integration 🔗
+> [!CAUTION]
+> This is an experimental project and not ready for production use. Use at your own risk.
+
+# Datahub LLM Lineage 🔗
 
 <p align="center">
-  <strong>Seamless LLM Lineage for DataHub</strong>
+  <img src="screenshot.png" alt="Screenshot" width="700"/>
+</p>
+
+<p align="center">
+  <strong>Seamless LLM Lineage for DataHub with LangChain and LangSmith</strong>
 </p>
 
 <p align="center">
