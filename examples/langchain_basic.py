@@ -31,6 +31,10 @@ def main():
             gms_server="http://localhost:8080",
             debug=True
         )
+
+        # Register platforms before using them
+        emitter.register_platforms()
+
         observer = LangChainObserver(
             config=config,
             emitter=emitter,
