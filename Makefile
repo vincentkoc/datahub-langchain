@@ -1,4 +1,4 @@
-.PHONY: install test lint clean dry-run run venv dev format check-connection setup-token docker-up docker-down docker-nuke
+.PHONY: install test lint clean dry-run run venv dev format check-connection setup-token docker-up docker-down docker-nuke flush-data flush-elastic flush-graph
 
 PYTHON := python3
 VENV := .venv
@@ -85,3 +85,31 @@ setup-token:
 		| jq -r '.accessToken' > .datahub-token
 	@echo "Token saved to .datahub-token"
 	@echo "Please add this token to your .env file as DATAHUB_TOKEN"
+
+# Add these new targets
+flush-data: flush-elastic flush-graph
+	@echo "DataHub data has been flushed"
+
+# Flush Elasticsearch indices
+flush-elastic:
+	@echo "Flushing Elasticsearch indices..."
+	@curl -X POST ${DATAHUB_GMS_URL}/entities?action=batchDelete \
+		-H "Authorization: Bearer ${DATAHUB_TOKEN}" \
+		-H "Content-Type: application/json" \
+		-d '{"urns": ["*"]}'
+
+# Flush Neo4j graph
+flush-graph:
+	@echo "Flushing Neo4j graph..."
+	@curl -X POST ${DATAHUB_GMS_URL}/graphql \
+		-H "Authorization: Bearer ${DATAHUB_TOKEN}" \
+		-H "Content-Type: application/json" \
+		-d '{"query": "mutation { deleteGraph }"}'
+
+# Optional: Add a safer version that only removes specific data
+flush-langsmith-data:
+	@echo "Flushing LangSmith data..."
+	@curl -X POST ${DATAHUB_GMS_URL}/entities?action=batchDelete \
+		-H "Authorization: Bearer ${DATAHUB_TOKEN}" \
+		-H "Content-Type: application/json" \
+		-d '{"urns": ["urn:li:dataset:(urn:li:dataPlatform:langsmith,*,PROD)"]}'
