@@ -10,6 +10,47 @@ from datahub.metadata.schema_classes import (
     DatasetPropertiesClass
 )
 import json
+from unittest.mock import Mock
+
+@pytest.fixture
+def mock_langsmith_run():
+    """Create a properly configured mock run"""
+    run = Mock()
+
+    # Set basic attributes
+    run.id = "test-run-id"
+    run.start_time = datetime.now()
+    run.end_time = datetime.now()
+
+    # Set execution metadata for model info
+    run.execution_metadata = {
+        "model_name": "gpt-3.5-turbo"
+    }
+
+    # Set other required attributes
+    run.inputs = {"prompt": "test"}
+    run.outputs = {"response": "test"}
+    run.error = None
+    run.tags = []
+    run.feedback_stats = {}
+    run.latency = 1.0
+    run.token_usage = {"total": 100}
+    run.cost = 0.001
+    run.metrics = {
+        "latency": 1.0,
+        "token_usage": {"total": 100},
+        "cost": 0.001
+    }
+    run.metadata = {"test": "metadata"}
+
+    # Configure mock to return real values
+    for attr in ['id', 'start_time', 'end_time', 'execution_metadata', 'inputs',
+                'outputs', 'error', 'tags', 'feedback_stats', 'latency',
+                'token_usage', 'cost', 'metrics', 'metadata']:
+        setattr(type(run), attr, property(lambda self, a=attr: getattr(self, f"_{a}", None)))
+        setattr(run, f"_{attr}", getattr(run, attr))
+
+    return run
 
 @pytest.mark.integration
 def test_full_ingestion_flow(tmp_path, mock_config, mock_langsmith_run):

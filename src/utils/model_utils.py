@@ -78,6 +78,8 @@ def get_capabilities_from_model(model_name: str) -> List[str]:
         capabilities.append("instruction-following")
     if "code" in model_name or "codex" in model_name:
         capabilities.append("code-generation")
+    if "function" in model_name or "gpt-4" in model_name or "gpt-3.5" in model_name:
+        capabilities.append("function-calling")  # Add function calling capability for GPT models
 
     return capabilities
 

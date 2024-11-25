@@ -52,6 +52,7 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
 
         # Set minimal headers exactly matching the working curl command
         headers = {
+            "Content-Type": "application/json",
             "Accept": "*/*",
             "User-Agent": "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0)"
         }
@@ -147,16 +148,34 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
                     self._debug("Request headers:", headers)
                     self._debug("Request payload:", payload)
 
-                response = self._session.post(url, json=payload, headers=headers)
+                # Implement retry logic
+                retries = 0
+                max_retries = 3
+                while retries < max_retries:
+                    try:
+                        response = self._session.post(url, json=payload, headers=headers)
 
-                if self.debug:
-                    self._debug("Response status:", response.status_code)
-                    self._debug("Response headers:", dict(response.headers))
-                    if response.text:
-                        self._debug("Response body:", response.text)
+                        if self.debug:
+                            self._debug("Response status:", response.status_code)
+                            self._debug("Response headers:", dict(response.headers))
+                            if response.text:
+                                self._debug("Response body:", response.text)
 
-                if response.status_code != 200:
-                    response.raise_for_status()
+                        if response.status_code == 200:
+                            break
+
+                        retries += 1
+                        if retries == max_retries:
+                            raise Exception(f"Failed after {max_retries} retries: {response.text}")
+                        time.sleep(0.2 * (2 ** retries))  # Exponential backoff
+
+                    except Exception as e:
+                        if retries == max_retries - 1:
+                            if self.debug:
+                                self._debug_error(e)
+                            raise
+                        retries += 1
+                        time.sleep(0.2 * (2 ** retries))
 
         except Exception as e:
             if self.debug:
