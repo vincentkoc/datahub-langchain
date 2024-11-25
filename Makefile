@@ -19,7 +19,7 @@ dev: install
 	$(BIN)/pip install -e .
 
 test: dev
-	PYTHONPATH=. $(BIN)/pytest tests/ -v --cov=src --cov-report=term-missing
+	PYTHONPATH=. $(BIN)/pytest tests/ -v --cov=src --cov-report=term-missing || exit 1
 
 lint: dev
 	$(BIN)/flake8 src/ tests/
