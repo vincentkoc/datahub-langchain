@@ -181,7 +181,7 @@ class DataHubEmitter(LLMMetadataEmitter):
         self.config = ObservabilityConfig.from_env()
         self.debug = debug
         self.hard_fail = hard_fail
-        self._emitted_urns = set()
+        self._successful_emissions = set()
 
         # Clean up GMS server URL
         self.gms_server = gms_server or self.config.datahub_gms_url
@@ -212,60 +212,62 @@ class DataHubEmitter(LLMMetadataEmitter):
     def emit_model(self, model: LLMModel) -> str:
         """Emit model metadata to DataHub"""
         try:
-            model_name = f"{model.provider}/{model.name}"
             model_urn = make_ml_model_urn(
                 platform=self.platform,
-                model_name=model_name,
+                model_name=model.name,
                 env="PROD"
             )
 
-            if model_urn in self._emitted_urns:
+            if model_urn in self._successful_emissions:
                 if self.debug:
-                    print(f"\n⚠ Model already emitted: {model.name}")
+                    print(f"\n⚠ Model already successfully emitted: {model.name}")
                 return model_urn
 
-            # Create MLModelProperties aspect with correct namespace
-            properties_aspect = {
-                "com.linkedin.ml.metadata.MLModelProperties": {
-                    "description": f"{model.provider} {model.name} Language Model",
-                    "type": model.model_family,
-                    "customProperties": {
-                        "provider": str(model.provider),
-                        "model_family": str(model.model_family),
-                        "capabilities": str(model.capabilities),
-                        "parameters": str(model.parameters),
-                        "metadata": str(model.metadata)
-                    },
-                    "hyperParameters": [
-                        {"key": k, "value": str(v)}
-                        for k, v in model.parameters.items()
-                    ] if model.parameters else [],
-                    "tags": model.capabilities
-                }
-            }
+            # Create MLModelProperties aspect
+            properties = MLModelPropertiesClass(
+                description=model.metadata.get("description", f"{model.provider} {model.name} Language Model"),
+                type=model.model_family,
+                customProperties={
+                    "provider": str(model.provider),
+                    "model_family": str(model.model_family),
+                    "capabilities": str(model.capabilities),
+                    "parameters": str(model.parameters),
+                    "raw_name": model.metadata.get("raw_name", model.name),
+                    **model.metadata
+                },
+                hyperParameters=[
+                    MLHyperParamClass(
+                        name=str(k),
+                        value=str(v)
+                    )
+                    for k, v in model.parameters.items()
+                ] if model.parameters else None
+            )
 
-            # Create tags aspect with correct namespace
-            tags_aspect = {
-                "com.linkedin.metadata.snapshot.MLModelSnapshot.tags": {
-                    "tags": [
-                        {"tag": make_tag_urn(tag)}
-                        for tag in model.capabilities
-                    ]
-                }
-            }
+            # Create tags aspect
+            tags = GlobalTagsClass(
+                tags=[
+                    TagAssociationClass(tag=make_tag_urn(tag))
+                    for tag in model.capabilities
+                ]
+            )
 
             mce = MetadataChangeEventClass(
                 proposedSnapshot=MLModelSnapshotClass(
                     urn=model_urn,
                     aspects=[
-                        properties_aspect,
-                        tags_aspect
+                        properties,
+                        tags
                     ]
                 )
             )
 
             self._emit_with_retry(mce)
-            self._emitted_urns.add(model_urn)
+            self._successful_emissions.add(model_urn)
+
+            if self.debug:
+                print(f"\n✓ Successfully emitted model: {model.name}")
+
             return model_urn
 
         except Exception as e:
