@@ -219,15 +219,23 @@ class DataHubEmitter(LLMMetadataEmitter):
         )
 
     def _emit_with_retry(self, mce: MetadataChangeEventClass) -> None:
-        """Emit metadata with proper error handling"""
-        try:
-            if not self.config.datahub_dry_run:
-                self.emitter.emit(mce)
-        except Exception as e:
-            if self.debug:
-                print(f"\n✗ Emission failed: {str(e)}")
-            if self.hard_fail or not self.config.datahub_dry_run:
-                raise
+        """Emit metadata with proper error handling and retry"""
+        max_retries = 3
+        retry_delay = 1.0
+
+        for attempt in range(max_retries):
+            try:
+                if not self.config.datahub_dry_run:
+                    self.emitter.emit(mce)
+                    return  # Success, exit retry loop
+            except Exception as e:
+                if self.debug:
+                    print(f"\n✗ Emission failed (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                if attempt == max_retries - 1:  # Last attempt
+                    if self.hard_fail:
+                        raise
+                else:
+                    time.sleep(retry_delay * (attempt + 1))
 
     def emit_model(self, model: LLMModel) -> str:
         """Emit model metadata to DataHub"""
