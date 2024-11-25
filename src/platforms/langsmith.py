@@ -67,7 +67,14 @@ class LangSmithConnector(LLMPlatformConnector):
         """Get run history from LangSmith"""
         try:
             if start_time is None:
-                start_time = datetime.now() - timedelta(days=7)
+                start_time = datetime.now() - timedelta(days=self.config.ingest_window_days)
+
+            if self.config.langchain_verbose:
+                print(f"\nFetching runs from LangSmith...")
+                print(f"Project: {self.project_name}")
+                print(f"Start time: {start_time}")
+                print(f"End time: {end_time}")
+                print(f"Limit: {limit}")
 
             runs = self.client.list_runs(
                 project_name=self.project_name,
@@ -77,9 +84,16 @@ class LangSmithConnector(LLMPlatformConnector):
                 limit=limit
             )
 
+            if self.config.langchain_verbose:
+                print(f"Found {len(runs)} runs")
+
             return [self._create_run_from_langsmith(run) for run in runs]
+
         except Exception as e:
             print(f"Error fetching LangSmith runs: {e}")
+            if self.config.langchain_verbose:
+                import traceback
+                print(f"Traceback: {traceback.format_exc()}")
             return []
 
     def get_chains(self) -> List[LLMChain]:
@@ -191,6 +205,57 @@ class LangSmithConnector(LLMPlatformConnector):
             return 'Claude'
         return 'unknown'
 
+    def _convert_run(self, run) -> Optional[LLMRun]:
+        """Convert LangSmith run to LLMRun with error handling"""
+        try:
+            # Extract model info if available
+            model = None
+            if hasattr(run, 'execution_metadata') and run.execution_metadata:
+                model_name = run.execution_metadata.get('model_name')
+                if model_name:
+                    model = LLMModel(
+                        name=model_name,
+                        provider=get_provider_from_model(model_name),
+                        model_family=get_model_family(model_name),
+                        capabilities=get_capabilities_from_model(model_name),
+                        parameters={},
+                        metadata={
+                            "source": "langsmith",
+                            "project": self.project_name
+                        }
+                    )
+
+            # Extract metrics with defaults
+            metrics = {
+                "latency": getattr(run, 'latency', 0),
+                "token_usage": getattr(run, 'token_usage', {}),
+                "cost": getattr(run, 'cost', 0),
+                "error_rate": 1.0 if getattr(run, 'error', None) else 0.0,
+                "success_rate": 0.0 if getattr(run, 'error', None) else 1.0
+            }
+
+            # Create LLMRun object
+            return LLMRun(
+                id=str(getattr(run, 'id', '')),
+                start_time=getattr(run, 'start_time', datetime.now()),
+                end_time=getattr(run, 'end_time', datetime.now()),
+                model=model,
+                inputs=dict(getattr(run, 'inputs', {})),
+                outputs=dict(getattr(run, 'outputs', {})),
+                metrics=metrics,
+                metadata={
+                    "error": str(getattr(run, 'error', '')),
+                    "tags": list(getattr(run, 'tags', [])),
+                    "feedback_stats": dict(getattr(run, 'feedback_stats', {})),
+                    "source": "langsmith",
+                    "project": self.project_name,
+                    "run_type": getattr(run, 'run_type', 'unknown')
+                }
+            )
+        except Exception as e:
+            print(f"Error converting run {getattr(run, 'id', 'unknown')}: {e}")
+            return None
+
 class LangsmithIngestor(BaseIngestor):
     def __init__(self, config, save_debug_data=True, processing_dir=None,
                  emit_to_datahub=True, datahub_emitter=None):
@@ -281,56 +346,46 @@ class LangsmithIngestor(BaseIngestor):
             self.json_emitter.emit([mce.to_obj() for mce in processed_data], 'processed_data.json')
 
     def _convert_run_to_mce(self, run) -> MetadataChangeEventClass:
-        """Convert LangSmith run to DataHub MCE with proper JSON handling"""
+        """Convert LangSmith run to DataHub MCE"""
         try:
-            # Helper function to safely convert values to JSON
-            def safe_json_dumps(value, default=None):
-                if value is None:
-                    return json.dumps(default)
-                try:
-                    # Handle Mock objects by getting their return value
-                    if hasattr(value, '_mock_return_value'):
-                        value = value._mock_return_value
-                    # Convert to dict if possible
-                    if hasattr(value, '__dict__'):
-                        value = value.__dict__
-                    return json.dumps(value)
-                except (TypeError, AttributeError):
-                    return json.dumps(default)
+            # First emit model if present
+            model_urn = None
+            if run.model:
+                model_urn = f"urn:li:mlModel:(urn:li:dataPlatform:langsmith,{run.model.name},PROD)"
 
-            # Helper function to safely get datetime
-            def safe_datetime(dt_value):
-                if dt_value is None:
-                    return ""
-                if isinstance(dt_value, datetime):
-                    return dt_value.isoformat()
-                return ""
+            # Create pipeline URN using project name
+            pipeline_urn = f"urn:li:mlModel:(urn:li:dataPlatform:langsmith,{self.connector.project_name},PROD)"
 
-            # Safely extract and convert run attributes
-            run_attributes = {
-                "run_id": str(getattr(run, 'id', '')),
-                "start_time": safe_datetime(getattr(run, 'start_time', None)),
-                "end_time": safe_datetime(getattr(run, 'end_time', None)),
-                "metrics": safe_json_dumps(getattr(run, 'metrics', {}), default={}),
-                "inputs": safe_json_dumps(getattr(run, 'inputs', {}), default={}),
-                "outputs": safe_json_dumps(getattr(run, 'outputs', {}), default={}),
-                "metadata": safe_json_dumps(getattr(run, 'metadata', {}), default={})
+            # Create run URN - use MLModel instead of Dataset
+            run_urn = f"urn:li:mlModel:(urn:li:dataPlatform:langsmith,runs.{run.id},PROD)"
+
+            # Create properties for the run - ensure all values are strings
+            custom_properties = {
+                "run_id": str(run.id),
+                "start_time": run.start_time.isoformat() if run.start_time else "",
+                "end_time": run.end_time.isoformat() if run.end_time else "",
+                "metrics": str(run.metrics),  # Convert dict to string
+                "inputs": str(run.inputs),    # Convert dict to string
+                "outputs": str(run.outputs),  # Convert dict to string
+                "metadata": str(run.metadata), # Convert dict to string
+                "model_urn": str(model_urn) if model_urn else "",
+                "pipeline_urn": str(pipeline_urn),
+                "project": str(self.connector.project_name),
+                "display_name": f"Run {run.id}"  # Add display name as a property instead
             }
 
-            # Create URN for the run
-            run_urn = f"urn:li:dataset:(urn:li:dataPlatform:langsmith,runs/{run_attributes['run_id']},PROD)"
+            # Create run properties using MLModelProperties instead of DatasetProperties
+            run_properties = MLModelPropertiesClass(
+                description=f"LangSmith Run in project {self.connector.project_name}",
+                type="Run",  # Specify type as Run
+                customProperties=custom_properties
+            )
 
-            # Create MCE
+            # Create MCE with MLModelSnapshot
             return MetadataChangeEventClass(
-                proposedSnapshot=DatasetSnapshotClass(
+                proposedSnapshot=MLModelSnapshotClass(
                     urn=run_urn,
-                    aspects=[
-                        DatasetPropertiesClass(
-                            name=f"LLM Run {run_attributes['run_id']}",
-                            description=f"Run ID: {run_attributes['run_id']}",
-                            customProperties=run_attributes
-                        )
-                    ]
+                    aspects=[run_properties]
                 )
             )
         except Exception as e:
