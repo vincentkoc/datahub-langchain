@@ -254,7 +254,7 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
         self.registered_models = set()
 
         # Get pipeline name from source file or override
-        self.pipeline_name = pipeline_name or self._detect_pipeline_name()
+        self.pipeline_name = pipeline_name or detect_pipeline_name()
 
     def on_llm_start(self, serialized: Dict, prompts: List[str], **kwargs) -> None:
         run_id = kwargs.get("run_id", str(uuid.uuid4()))
