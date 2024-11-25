@@ -21,6 +21,8 @@ from datahub.metadata.schema_classes import (
 
 from ..base import LLMMetadataEmitter, LLMModel, LLMRun, LLMChain
 from ..config import ObservabilityConfig
+from ..utils.pipeline_utils import detect_pipeline_name
+from ..platforms.extender import DataHubPlatformExtender
 
 class CustomDatahubRestEmitter(DatahubRestEmitter):
     """DataHub REST emitter with enhanced authentication and error handling"""
@@ -210,6 +212,12 @@ class DataHubEmitter(LLMMetadataEmitter):
             debug=self.debug
         )
 
+        # Initialize platform extender
+        self.platform_extender = DataHubPlatformExtender(
+            gms_server=self.gms_server,
+            token=self.config.datahub_token
+        )
+
     def _emit_with_retry(self, mce: MetadataChangeEventClass) -> None:
         """Emit metadata with proper error handling"""
         try:
@@ -221,65 +229,6 @@ class DataHubEmitter(LLMMetadataEmitter):
             if self.hard_fail or not self.config.datahub_dry_run:
                 raise
 
-    def emit_model_group(self, model: LLMModel) -> str:
-        """Emit model group metadata to DataHub"""
-        try:
-            # Create a model URN for the group
-            group_urn = make_ml_model_urn(
-                platform=self.platform,
-                model_name=f"group_{model.model_family}",
-                env="PROD"
-            )
-
-            if group_urn in self._successful_emissions:
-                if self.debug:
-                    print(f"\n⚠ Model group already successfully emitted: {model.model_family}")
-                return group_urn
-
-            # Create properties for the group
-            properties = MLModelPropertiesClass(
-                description=f"{model.provider} {model.model_family} Model Family",
-                type="Model Group",
-                customProperties={
-                    "provider": str(model.provider),
-                    "model_family": str(model.model_family),
-                    "group_type": "llm_family",
-                    "source": "langchain"
-                }
-            )
-
-            # Create tags for the group
-            tags = GlobalTagsClass(
-                tags=[
-                    TagAssociationClass(tag=f"urn:li:tag:{cap}")
-                    for cap in model.capabilities
-                ] if model.capabilities else []
-            )
-
-            # Create the metadata change event
-            mce = MetadataChangeEventClass(
-                proposedSnapshot=MLModelSnapshotClass(
-                    urn=group_urn,
-                    aspects=[properties, tags]
-                )
-            )
-
-            # Emit the metadata
-            self._emit_with_retry(mce)
-            self._successful_emissions.add(group_urn)
-
-            if self.debug:
-                print(f"\n✓ Successfully emitted model group: {model.model_family}")
-
-            return group_urn
-
-        except Exception as e:
-            if self.debug:
-                print(f"\n✗ Failed to emit model group {model.model_family}: {e}")
-            if self.hard_fail:
-                raise
-            return ""
-
     def emit_model(self, model: LLMModel) -> str:
         """Emit model metadata to DataHub"""
         try:
@@ -289,12 +238,7 @@ class DataHubEmitter(LLMMetadataEmitter):
                 env="PROD"
             )
 
-            if model_urn in self._successful_emissions:
-                if self.debug:
-                    print(f"\n⚠ Model already successfully emitted: {model.name}")
-                return model_urn
-
-            # Create properties with group reference if available
+            # Create properties without group reference
             properties = MLModelPropertiesClass(
                 description=f"{model.provider} {model.name} Language Model",
                 type="Language Model",
@@ -307,44 +251,20 @@ class DataHubEmitter(LLMMetadataEmitter):
                     "source": "langchain"
                 },
                 hyperParams=[
-                    MLHyperParamClass(
-                        name=k,
-                        value=str(v)
-                    )
+                    MLHyperParamClass(name=k, value=str(v))
                     for k, v in model.parameters.items()
                 ] if model.parameters else None
-            )
-
-            # Create tags
-            tags = GlobalTagsClass(
-                tags=[
-                    TagAssociationClass(tag=f"urn:li:tag:{cap}")
-                    for cap in model.capabilities
-                ] if model.capabilities else []
             )
 
             # Create the metadata change event
             mce = MetadataChangeEventClass(
                 proposedSnapshot=MLModelSnapshotClass(
                     urn=model_urn,
-                    aspects=[properties, tags]
+                    aspects=[properties]
                 )
             )
 
-            # First emit the group if this model belongs to one
-            if model.model_family:
-                group_urn = self.emit_model_group(model)
-                # Add group relationship to properties if needed
-                if group_urn:
-                    properties.customProperties["group_urn"] = group_urn
-
-            # Emit the model
             self._emit_with_retry(mce)
-            self._successful_emissions.add(model_urn)
-
-            if self.debug:
-                print(f"\n✓ Successfully emitted model: {model.name}")
-
             return model_urn
 
         except Exception as e:
@@ -355,48 +275,51 @@ class DataHubEmitter(LLMMetadataEmitter):
             return ""
 
     def emit_run(self, run: LLMRun) -> str:
-        """Emit run metadata as a DataHub MLModel"""
+        """Emit run metadata as part of a pipeline"""
         try:
-            # Get pipeline name from run metadata or use default
-            pipeline_name = run.metadata.get("pipeline_name", "default_pipeline")
+            # Get pipeline name from metadata or detect from file
+            pipeline_name = run.metadata.get("pipeline_name")
+            if not pipeline_name:
+                pipeline_name = detect_pipeline_name()
 
-            # Create pipeline URN using MLModel format
+            # Create URN for the pipeline
             pipeline_urn = make_ml_model_urn(
                 platform=self.platform,
-                model_name=f"pipeline_{pipeline_name}_{run.id}",
+                model_name=pipeline_name,
                 env="PROD"
             )
 
-            # Simplify metrics to basic string values
-            metrics_dict = {}
-            if run.metrics:
-                for k, v in run.metrics.items():
-                    if isinstance(v, (int, float, str, bool)):
-                        metrics_dict[k] = str(v)
-                    else:
-                        metrics_dict[k] = str(v)[:250]  # Truncate long values
+            # Flatten metrics into simple key-value pairs
+            metrics = {}
+            for k, v in run.metrics.items():
+                if isinstance(v, (int, float, bool)):
+                    metrics[k] = str(v)
+                elif isinstance(v, dict):
+                    # For nested metrics like token_usage, flatten with underscore
+                    for sub_k, sub_v in v.items():
+                        metrics[f"{k}_{sub_k}"] = str(sub_v)
+                else:
+                    metrics[k] = str(v)
 
-            # Create pipeline properties using MLModelProperties
+            # Create pipeline properties
             properties = MLModelPropertiesClass(
-                description=f"LangChain Pipeline Run: {pipeline_name}",
-                type="Pipeline Run",
+                description=f"LangChain Pipeline: {pipeline_name}",
+                type="Pipeline",
                 customProperties={
                     "pipeline_name": pipeline_name,
-                    "run_id": str(run.id),
                     "framework": "langchain",
-                    "type": "llm_pipeline",
-                    "start_time": str(run.start_time.isoformat()),
-                    "end_time": str(run.end_time.isoformat() if run.end_time else None),
-                    "status": "completed" if not run.metrics.get("error") else "failed",
-                    **metrics_dict
+                    "last_run_id": str(run.id),
+                    "last_run_time": str(run.start_time.isoformat()),
+                    "last_run_status": "completed" if not run.metrics.get("error") else "failed",
+                    **metrics
                 }
             )
 
-            # Add tags for pipeline status and type
+            # Add tags
             tags = GlobalTagsClass(
                 tags=[
                     TagAssociationClass(tag=f"urn:li:tag:pipeline"),
-                    TagAssociationClass(tag=f"urn:li:tag:{pipeline_name}"),
+                    TagAssociationClass(tag=f"urn:li:tag:langchain"),
                     TagAssociationClass(tag=f"urn:li:tag:{'success' if not run.metrics.get('error') else 'failed'}")
                 ]
             )
@@ -405,10 +328,7 @@ class DataHubEmitter(LLMMetadataEmitter):
             mce = MetadataChangeEventClass(
                 proposedSnapshot=MLModelSnapshotClass(
                     urn=pipeline_urn,
-                    aspects=[
-                        properties,
-                        tags
-                    ]
+                    aspects=[properties, tags]
                 )
             )
 
@@ -481,5 +401,15 @@ class DataHubEmitter(LLMMetadataEmitter):
         except Exception as e:
             if self.debug:
                 print(f"Error emitting MCE: {e}")
+            if self.hard_fail:
+                raise
+
+    def register_platforms(self) -> None:
+        """Register all supported platforms in DataHub"""
+        try:
+            self.platform_extender.register_all_platforms()
+        except Exception as e:
+            if self.debug:
+                print(f"Failed to register platforms: {e}")
             if self.hard_fail:
                 raise
