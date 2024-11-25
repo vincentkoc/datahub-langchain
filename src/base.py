@@ -13,6 +13,16 @@ class LLMModel:
     parameters: Dict[str, Any]
     metadata: Dict[str, Any]
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "provider": self.provider,
+            "model_family": self.model_family,
+            "capabilities": self.capabilities,
+            "parameters": self.parameters,
+            "metadata": self.metadata
+        }
+
 @dataclass
 class LLMRun:
     """Represents a single LLM execution"""
@@ -25,6 +35,19 @@ class LLMRun:
     metrics: Dict[str, Any]
     parent_id: Optional[str]
     metadata: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "start_time": self.start_time.isoformat(),
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "model": self.model.to_dict() if self.model else None,
+            "inputs": self.inputs,
+            "outputs": self.outputs,
+            "metrics": self.metrics,
+            "parent_id": self.parent_id,
+            "metadata": self.metadata
+        }
 
 @dataclass
 class LLMChain:
