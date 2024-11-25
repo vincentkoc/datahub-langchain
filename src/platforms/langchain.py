@@ -5,6 +5,7 @@ import uuid
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult, AgentAction
 from langchain.prompts import BasePromptTemplate
+from langchain_openai import ChatOpenAI
 
 from ..base import (
     LLMObserver,
@@ -49,14 +50,30 @@ class LangChainConnector(LLMPlatformConnector):
 
     def _create_model_from_langchain(self, model: Any) -> LLMModel:
         """Create LLMModel from LangChain model"""
-        model_name = getattr(model, 'model_name', 'unknown')
+        # Extract model info from the serialized data if it's a dict
+        if isinstance(model, dict):
+            model_name = model.get('id', [])
+            if isinstance(model_name, list):
+                model_name = model_name[-1] if model_name else 'unknown'
+            elif not model_name:
+                model_name = 'unknown'
+        else:
+            model_name = getattr(model, 'model_name', 'unknown')
+
+        provider = self._get_provider_from_model(model_name)
+        model_family = self._get_family_from_model(model_name)
+
         return LLMModel(
             name=model_name,
-            provider=self._get_provider_from_model(model_name),
-            model_family=self._get_family_from_model(model_name),
+            provider=provider,
+            model_family=model_family,
             capabilities=self._get_capabilities_from_model(model),
             parameters=self._get_model_parameters(model),
-            metadata={"source": "langchain"}
+            metadata={
+                "source": "langchain",
+                "type": model_family,  # Add type field required by DataHub
+                "description": f"{provider} {model_name} Language Model"  # Add description
+            }
         )
 
     def _create_chain_from_langchain(self, chain: Any) -> LLMChain:
@@ -87,25 +104,36 @@ class LangChainConnector(LLMPlatformConnector):
             return 'GPT-3.5'
         elif 'claude' in model_name:
             return 'Claude'
-        return 'unknown'
+        return 'Language Model'  # Default type for DataHub
 
     @staticmethod
     def _get_capabilities_from_model(model: Any) -> List[str]:
         """Determine model capabilities"""
         capabilities = ['text-generation']
-        if hasattr(model, 'streaming') and model.streaming:
-            capabilities.append('streaming')
-        if hasattr(model, 'functions') and model.functions:
-            capabilities.append('function-calling')
+        if isinstance(model, dict):
+            if model.get('streaming', False):
+                capabilities.append('streaming')
+            if model.get('functions'):
+                capabilities.append('function-calling')
+        else:
+            if hasattr(model, 'streaming') and model.streaming:
+                capabilities.append('streaming')
+            if hasattr(model, 'functions') and model.functions:
+                capabilities.append('function-calling')
         return capabilities
 
     @staticmethod
     def _get_model_parameters(model: Any) -> Dict[str, Any]:
         """Get model parameters"""
         params = {}
-        for param in ['temperature', 'max_tokens', 'top_p', 'frequency_penalty', 'presence_penalty']:
-            if hasattr(model, param):
-                params[param] = getattr(model, param)
+        if isinstance(model, dict):
+            for param in ['temperature', 'max_tokens', 'top_p', 'frequency_penalty', 'presence_penalty']:
+                if param in model:
+                    params[param] = model[param]
+        else:
+            for param in ['temperature', 'max_tokens', 'top_p', 'frequency_penalty', 'presence_penalty']:
+                if hasattr(model, param):
+                    params[param] = getattr(model, param)
         return params
 
     @staticmethod
@@ -138,6 +166,13 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
         self.emitter = emitter
         self.active_runs: Dict[str, Dict] = {}
         self.connector = LangChainConnector()
+
+    def _create_model_urn(self, model_identifier: str) -> str:
+        """Create a DataHub URN for a model without using make_ml_model_urn"""
+        # Format: urn:li:mlModel:(platform,name,env)
+        platform = "openai"
+        env = "PROD"
+        return f"urn:li:mlModel:({platform},{model_identifier},{env})"
 
     def on_llm_start(self, serialized: Dict, prompts: List[str], **kwargs) -> None:
         """Called when LLM starts running"""
@@ -192,7 +227,7 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
                 if metrics.token_usage:
                     print(f"Tokens: {metrics.token_usage}")
 
-            self.emit_run(run)
+            self.emitter.emit_run(run)
             self.end_run(run_id)
             del self.active_runs[run_id]
 
@@ -203,11 +238,13 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
 
     def start_run(self, run_id: str, **kwargs) -> None:
         """Start observing a run"""
-        print(f"Starting run: {run_id}")
+        if self.config.langchain_verbose:
+            print(f"Starting run: {run_id}")
 
     def end_run(self, run_id: str, **kwargs) -> None:
         """End observing a run"""
-        print(f"Ending run: {run_id}")
+        if self.config.langchain_verbose:
+            print(f"Ending run: {run_id}")
 
     def log_metrics(self, run_id: str, metrics: Dict[str, Any]) -> None:
         """Log metrics for a run"""
