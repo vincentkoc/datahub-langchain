@@ -6,6 +6,7 @@ BIN := $(VENV)/bin
 DATAHUB_SECRET := $(shell cat .env | grep DATAHUB_SECRET | cut -d '=' -f2)
 DATAHUB_TOKEN := $(shell cat .env | grep DATAHUB_TOKEN | cut -d '=' -f2)
 DATAHUB_GMS_URL := $(shell cat .env | grep DATAHUB_GMS_URL | cut -d '=' -f2)
+DATAHUB_VERSION := $(shell cat .env | grep DATAHUB_VERSION | cut -d '=' -f2)
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -18,7 +19,7 @@ dev: install
 #	$(BIN)/pip install -r requirements-dev.txt
 	$(BIN)/pip install -e .
 
-test: dev
+test: #dev
 	PYTHONPATH=. $(BIN)/pytest tests/ -v --cov=src --cov-report=term-missing || exit 1
 
 lint: dev
@@ -59,7 +60,7 @@ docker-up:
 		echo "Creating .env file..."; \
 		cp .env.example .env; \
 	fi
-	@DATAHUB_SECRET=${DATAHUB_SECRET} datahub docker quickstart --quickstart-compose-file docker-compose-quickstart.yml
+	@DATAHUB_SECRET=${DATAHUB_SECRET} DATAHUB_VERSION=${DATAHUB_VERSION} datahub docker quickstart --quickstart-compose-file docker-compose-quickstart.yml
 
 docker-down:
 	datahub docker quickstart --stop
