@@ -1,8 +1,9 @@
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
-from uuid import UUID
 import json
 from pathlib import Path
+import uuid
+from uuid import UUID
 
 from langsmith import Client
 from .base import BaseIngestor
@@ -14,7 +15,12 @@ from ..base import (
 )
 from ..models import Metrics
 from ..config import ObservabilityConfig
-from src.utils.model_utils import get_capabilities_from_model, get_provider_from_model
+from src.utils.model_utils import (
+    get_capabilities_from_model,
+    get_provider_from_model,
+    get_model_family,
+    get_model_parameters
+)
 from src.emitters.json_emitter import JSONEmitter
 from src.emitters.datahub import DataHubEmitter
 from datahub.metadata.schema_classes import (
@@ -64,36 +70,156 @@ class LangSmithConnector(LLMPlatformConnector):
 
     def get_runs(self, start_time: datetime = None, end_time: datetime = None,
                 limit: int = 1000) -> List[LLMRun]:
-        """Get run history from LangSmith"""
+        """Get run history from LangSmith with smart aggregation by trace"""
         try:
+            if not self.client:
+                print("\n=== DEBUG: Client Status ===")
+                print("Client is None, attempting to initialize...")
+                try:
+                    self.client = Client(
+                        api_url=self.config.get_platform_config("langsmith")["endpoint"],
+                        api_key=self.config.get_platform_config("langsmith")["api_key"]
+                    )
+                    print("✓ Client initialized successfully")
+                except Exception as e:
+                    print(f"✗ Failed to initialize LangSmith client: {e}")
+                    return []
+
             if start_time is None:
                 start_time = datetime.now() - timedelta(days=self.config.ingest_window_days)
 
-            if self.config.langchain_verbose:
-                print(f"\nFetching runs from LangSmith...")
-                print(f"Project: {self.project_name}")
-                print(f"Start time: {start_time}")
-                print(f"End time: {end_time}")
-                print(f"Limit: {limit}")
+            print("\n=== DEBUG: API Call Parameters ===")
+            print(f"Project: {self.project_name}")
+            print(f"Start time: {start_time}")
 
-            runs = self.client.list_runs(
-                project_name=self.project_name,
-                start_time=start_time,
-                end_time=end_time,
-                execution_order=1,
-                limit=limit
-            )
+            try:
+                print("\n=== DEBUG: Making API Call ===")
+                # Get all runs within window
+                runs_iterator = self.client.list_runs(
+                    project_name=self.project_name,
+                    start_time=start_time,
+                    end_time=end_time
+                )
+                print("✓ API call successful")
 
-            if self.config.langchain_verbose:
-                print(f"Found {len(runs)} runs")
+                # Convert iterator to list safely with debug info
+                all_runs = []
+                run_count = 0
+                for run in runs_iterator:
+                    run_count += 1
+                    if run_count == 1:  # Debug first run in detail
+                        print("\nFirst Run Details:")
+                        print(f"Run ID: {getattr(run, 'id', 'unknown')}")
+                        print(f"Run Type: {getattr(run, 'run_type', 'unknown')}")
+                        print(f"Extra: {getattr(run, 'extra', {})}")
 
-            return [self._create_run_from_langsmith(run) for run in runs]
+                    if run is not None:
+                        all_runs.append(run)
+
+                print(f"\nFound {len(all_runs)} runs")
+
+                if not all_runs:
+                    print("⚠️ No runs found")
+                    return []
+
+                # Process runs into LLMRun objects
+                processed_runs = []
+                for idx, run in enumerate(all_runs):
+                    try:
+                        # Extract model info from extra field
+                        model_info = None
+                        extra = getattr(run, 'extra', {}) or {}
+                        if extra and isinstance(extra, dict):
+                            invocation_params = extra.get('invocation_params', {})
+                            if invocation_params:
+                                model_info = {
+                                    'model_name': invocation_params.get('model_name', 'unknown'),
+                                    'temperature': invocation_params.get('temperature', 0.7),
+                                    'max_tokens': invocation_params.get('max_tokens'),
+                                    **extra.get('metadata', {})
+                                }
+
+                        # Create LLMModel if we have model info
+                        model = None
+                        if model_info:
+                            model = LLMModel(
+                                name=model_info.get('model_name', 'unknown'),
+                                provider=get_provider_from_model(model_info.get('model_name', '')),
+                                model_family=get_model_family(model_info.get('model_name', '')),
+                                capabilities=get_capabilities_from_model(model_info.get('model_name', '')),
+                                parameters=model_info,
+                                metadata={
+                                    "source": "langsmith",
+                                    "project": self.project_name,
+                                    "runtime": model_info.get('runtime'),
+                                    "platform": model_info.get('platform')
+                                }
+                            )
+
+                        # Get run metrics
+                        metrics = {
+                            "latency": getattr(run, 'latency', 0) or 0,
+                            "token_usage": getattr(run, 'token_usage', {}) or {},
+                            "total_tokens": getattr(run, 'total_tokens', 0) or 0,
+                            "prompt_tokens": getattr(run, 'prompt_tokens', 0) or 0,
+                            "completion_tokens": getattr(run, 'completion_tokens', 0) or 0,
+                            "total_cost": getattr(run, 'total_cost', 0) or 0,
+                            "error_rate": 1.0 if getattr(run, 'error', None) else 0.0,
+                            "success_rate": 0.0 if getattr(run, 'error', None) else 1.0
+                        }
+
+                        # Create LLMRun
+                        llm_run = LLMRun(
+                            id=str(getattr(run, 'id', str(uuid.uuid4()))),
+                            start_time=getattr(run, 'start_time', datetime.now()),
+                            end_time=getattr(run, 'end_time', datetime.now()),
+                            model=model,
+                            inputs=getattr(run, 'inputs', {}) or {},
+                            outputs=getattr(run, 'outputs', {}) or {},
+                            metrics=metrics,
+                            parent_id=str(getattr(run, 'parent_run_id', '')) or None,
+                            metadata={
+                                "source": "langsmith",
+                                "project": self.project_name,
+                                "run_type": getattr(run, 'run_type', 'unknown'),
+                                "trace_id": str(getattr(run, 'trace_id', '')) or '',
+                                "error": str(getattr(run, 'error', '')) or '',
+                                "tags": list(getattr(run, 'tags', [])) or [],
+                                "extra": extra
+                            }
+                        )
+
+                        processed_runs.append(llm_run)
+
+                    except Exception as e:
+                        print(f"Error creating LLMRun for {getattr(run, 'id', 'unknown')}: {e}")
+                        if idx == 0:  # Only show detailed error for first failure
+                            print("\n=== DEBUG: Error Details ===")
+                            print(f"Run attributes: {dir(run)}")
+                            print(f"Run dict: {run.__dict__ if hasattr(run, '__dict__') else 'No __dict__'}")
+                            import traceback
+                            print(f"Traceback: {traceback.format_exc()}")
+                        continue
+
+                print(f"\n=== DEBUG: Final Summary ===")
+                print(f"Successfully processed {len(processed_runs)} out of {len(all_runs)} runs")
+
+                return processed_runs
+
+            except Exception as e:
+                print(f"Error fetching runs from LangSmith API: {e}")
+                if self.config.langchain_verbose:
+                    import traceback
+                    print(f"\n=== DEBUG: API Error Details ===")
+                    print(traceback.format_exc())
+                return []
 
         except Exception as e:
-            print(f"Error fetching LangSmith runs: {e}")
+            print(f"Error in get_runs: {e}")
             if self.config.langchain_verbose:
                 import traceback
-                print(f"Traceback: {traceback.format_exc()}")
+                print(f"\n=== DEBUG: General Error Details ===")
+                print(traceback.format_exc())
             return []
 
     def get_chains(self) -> List[LLMChain]:
@@ -353,39 +479,44 @@ class LangsmithIngestor(BaseIngestor):
             if run.model:
                 model_urn = f"urn:li:mlModel:(urn:li:dataPlatform:langsmith,{run.model.name},PROD)"
 
-            # Create pipeline URN using project name
+            # Create pipeline URN using project name as the main identifier
             pipeline_urn = f"urn:li:mlModel:(urn:li:dataPlatform:langsmith,{self.connector.project_name},PROD)"
 
-            # Create run URN - use MLModel instead of Dataset
-            run_urn = f"urn:li:mlModel:(urn:li:dataPlatform:langsmith,runs.{run.id},PROD)"
-
-            # Create properties for the run - ensure all values are strings
+            # Aggregate run data into the pipeline properties
             custom_properties = {
-                "run_id": str(run.id),
-                "start_time": run.start_time.isoformat() if run.start_time else "",
-                "end_time": run.end_time.isoformat() if run.end_time else "",
-                "metrics": str(run.metrics),  # Convert dict to string
-                "inputs": str(run.inputs),    # Convert dict to string
-                "outputs": str(run.outputs),  # Convert dict to string
-                "metadata": str(run.metadata), # Convert dict to string
-                "model_urn": str(model_urn) if model_urn else "",
-                "pipeline_urn": str(pipeline_urn),
                 "project": str(self.connector.project_name),
-                "display_name": f"Run {run.id}"  # Add display name as a property instead
+                "model_urn": str(model_urn) if model_urn else "",
+                "latest_run_id": str(run.id),
+                "latest_run_time": run.start_time.isoformat() if run.start_time else "",
+                "latest_run_status": "success" if not run.metrics.get("error") else "failed",
+                "total_runs": "1",  # Could be incremented if we track state
+                "metrics": str({
+                    "latency": run.metrics.get("latency", 0),
+                    "token_usage": run.metrics.get("token_usage", {}),
+                    "cost": run.metrics.get("cost", 0),
+                    "error_rate": run.metrics.get("error_rate", 0.0),
+                    "success_rate": run.metrics.get("success_rate", 1.0)
+                }),
+                "run_history": str([{  # Keep last N runs as history
+                    "id": run.id,
+                    "time": run.start_time.isoformat() if run.start_time else "",
+                    "status": "success" if not run.metrics.get("error") else "failed",
+                    "metrics": run.metrics
+                }])
             }
 
-            # Create run properties using MLModelProperties instead of DatasetProperties
-            run_properties = MLModelPropertiesClass(
-                description=f"LangSmith Run in project {self.connector.project_name}",
-                type="Run",  # Specify type as Run
+            # Create run properties using MLModelProperties
+            properties = MLModelPropertiesClass(
+                description=f"LangSmith Project: {self.connector.project_name}",
+                type="LangSmith Pipeline",  # Identify as a LangSmith pipeline
                 customProperties=custom_properties
             )
 
             # Create MCE with MLModelSnapshot
             return MetadataChangeEventClass(
                 proposedSnapshot=MLModelSnapshotClass(
-                    urn=run_urn,
-                    aspects=[run_properties]
+                    urn=pipeline_urn,
+                    aspects=[properties]
                 )
             )
         except Exception as e:
