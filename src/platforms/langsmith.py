@@ -250,13 +250,13 @@ class LangsmithIngestor(BaseIngestor):
 
         # Construct custom properties
         custom_properties = {
-            "run_id": run.id,
+            "run_id": str(run.id),
             "start_time": run.start_time.isoformat(),
-            "end_time": run.end_time.isoformat() if run.end_time else None,
-            "inputs": json.dumps(run.inputs),
-            "outputs": json.dumps(run.outputs),
-            "metrics": json.dumps(run.metrics),
-            "metadata": json.dumps(run.metadata),
+            "end_time": run.end_time.isoformat() if run.end_time else "",
+            "inputs": json.dumps(run.inputs) if run.inputs else "{}",
+            "outputs": json.dumps(run.outputs) if run.outputs else "{}",
+            "metrics": json.dumps(run.metrics) if run.metrics else "{}",
+            "metadata": json.dumps(run.metadata) if run.metadata else "{}",
         }
 
         # Create MCE
@@ -267,9 +267,9 @@ class LangsmithIngestor(BaseIngestor):
                     DatasetPropertiesClass(
                         name=f"LLM Run {run.id}",
                         description=f"Run ID: {run.id}",
-                        customProperties=custom_properties
+                        customProperties=custom_properties,
                     )
-                ]
+                ],
             )
         )
         return mce
