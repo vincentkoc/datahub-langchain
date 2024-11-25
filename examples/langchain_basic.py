@@ -34,6 +34,7 @@ def main():
         observer = LangChainObserver(
             config=config,
             emitter=emitter,
+            pipeline_name="langchain_basic",
             group_models=False
         )
 

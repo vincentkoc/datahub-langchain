@@ -8,18 +8,15 @@ from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
 from datahub.emitter.rest_emitter import DatahubRestEmitter
-from datahub.emitter.mce_builder import make_dataset_urn, make_ml_model_urn, make_tag_urn
+from datahub.emitter.mce_builder import make_dataset_urn, make_ml_model_urn, make_tag_urn, make_data_job_urn
 from datahub.metadata.schema_classes import (
     MLModelPropertiesClass,
     MLModelKeyClass,
     MLHyperParamClass,
-    MLMetricClass,
-    DatasetPropertiesClass,
     MetadataChangeEventClass,
-    DatasetSnapshotClass,
     MLModelSnapshotClass,
     GlobalTagsClass,
-    TagAssociationClass,
+    TagAssociationClass
 )
 
 from ..base import LLMMetadataEmitter, LLMModel, LLMRun, LLMChain
@@ -192,7 +189,7 @@ class DataHubEmitter(LLMMetadataEmitter):
     """Emits LLM metadata to DataHub with comprehensive error handling and lineage tracking"""
 
     def __init__(self, gms_server: Optional[str] = None, debug: bool = False, hard_fail: bool = True):
-        self.platform = "llm"
+        self.platform = "langchain"
         self.config = ObservabilityConfig.from_env()
         self.debug = debug
         self.hard_fail = hard_fail
@@ -358,60 +355,74 @@ class DataHubEmitter(LLMMetadataEmitter):
             return ""
 
     def emit_run(self, run: LLMRun) -> str:
-        """Emit run metadata to DataHub"""
+        """Emit run metadata as a DataHub MLModel"""
         try:
-            # Create a run URN using MLModel type instead of Dataset
-            run_urn = make_ml_model_urn(
+            # Get pipeline name from run metadata or use default
+            pipeline_name = run.metadata.get("pipeline_name", "default_pipeline")
+
+            # Create pipeline URN using MLModel format
+            pipeline_urn = make_ml_model_urn(
                 platform=self.platform,
-                model_name=f"run_{run.id}",
+                model_name=f"pipeline_{pipeline_name}_{run.id}",
                 env="PROD"
             )
 
-            # Create properties for the run
+            # Simplify metrics to basic string values
+            metrics_dict = {}
+            if run.metrics:
+                for k, v in run.metrics.items():
+                    if isinstance(v, (int, float, str, bool)):
+                        metrics_dict[k] = str(v)
+                    else:
+                        metrics_dict[k] = str(v)[:250]  # Truncate long values
+
+            # Create pipeline properties using MLModelProperties
             properties = MLModelPropertiesClass(
-                description=f"LLM Run {run.id}",
-                type="Run",  # Identify as a run
+                description=f"LangChain Pipeline Run: {pipeline_name}",
+                type="Pipeline Run",
                 customProperties={
+                    "pipeline_name": pipeline_name,
                     "run_id": str(run.id),
-                    "inputs": str(run.inputs),
-                    "outputs": str(run.outputs),
-                    "metrics": str(run.metrics),
+                    "framework": "langchain",
+                    "type": "llm_pipeline",
                     "start_time": str(run.start_time.isoformat()),
                     "end_time": str(run.end_time.isoformat() if run.end_time else None),
-                    "parent_id": str(run.parent_id or "none"),
-                    "model": str(run.model.name if run.model else "unknown"),
-                    "status": "completed" if not run.metrics.get("error") else "failed"
-                },
-                hyperParams=[]  # Empty list since runs don't have hyperparameters
+                    "status": "completed" if not run.metrics.get("error") else "failed",
+                    **metrics_dict
+                }
+            )
+
+            # Add tags for pipeline status and type
+            tags = GlobalTagsClass(
+                tags=[
+                    TagAssociationClass(tag=f"urn:li:tag:pipeline"),
+                    TagAssociationClass(tag=f"urn:li:tag:{pipeline_name}"),
+                    TagAssociationClass(tag=f"urn:li:tag:{'success' if not run.metrics.get('error') else 'failed'}")
+                ]
             )
 
             # Create the metadata change event
             mce = MetadataChangeEventClass(
                 proposedSnapshot=MLModelSnapshotClass(
-                    urn=run_urn,
-                    aspects=[properties]
+                    urn=pipeline_urn,
+                    aspects=[
+                        properties,
+                        tags
+                    ]
                 )
             )
 
-            # Emit the metadata
-            self._emit_with_retry(mce)
-
-            # Emit lineage to model if available
+            # Add model lineage through custom properties
             if run.model:
-                try:
-                    model_urn = self.emit_model(run.model)
-                    self.emit_lineage(run_urn, model_urn, "Uses")
-                except Exception as e:
-                    if self.debug:
-                        print(f"✗ Failed to emit lineage for run {run.id}: {e}")
-                    if self.hard_fail:
-                        raise
+                model_urn = self.emit_model(run.model)
+                properties.customProperties["upstream_model"] = model_urn
 
-            return run_urn
+            self._emit_with_retry(mce)
+            return pipeline_urn
 
         except Exception as e:
             if self.debug:
-                print(f"\n✗ Failed to emit run {run.id}: {e}")
+                print(f"\n✗ Failed to emit pipeline run {run.id}: {e}")
             if self.hard_fail:
                 raise
             return ""
