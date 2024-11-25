@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
 from src.platforms.langsmith import LangsmithIngestor
 from src.config import ObservabilityConfig
@@ -73,24 +73,51 @@ def test_missing_metadata_handling():
     assert props["metadata"] == "{}"
 
 @pytest.mark.integration
-def test_datahub_emission_retry():
-    with patch('src.emitters.datahub.CustomDatahubRestEmitter') as mock_emitter:
-        # Setup mock to fail twice then succeed
-        mock_emitter.return_value.emit.side_effect = [
+def test_datahub_emission_retry(mock_config):
+    with patch('src.emitters.datahub.CustomDatahubRestEmitter') as mock_emitter_class:
+        # Setup mock emitter with proper retry behavior
+        mock_emitter = mock_emitter_class.return_value
+        mock_emitter.emit.side_effect = [
             Exception("First failure"),
             Exception("Second failure"),
             None  # Success on third try
         ]
 
+        # Create and configure the DataHub emitter
         emitter = DataHubEmitter(debug=True)
-        config = ObservabilityConfig()
-        config.datahub_dry_run = False
+        emitter.emitter = mock_emitter  # Directly set the mocked emitter
 
-        ingestor = LangsmithIngestor(config, emit_to_datahub=True)
+        # Configure the ingestor with the emitter
+        mock_config.datahub_dry_run = False
+        mock_config.default_emitter = "datahub"  # Important: set default emitter
 
-        # Should succeed after retries
-        run = Mock(id="retry-test-run", start_time=datetime.now())
+        ingestor = LangsmithIngestor(mock_config, emit_to_datahub=True)
+        ingestor.emitter = emitter  # Directly set the emitter
+
+        # Create a properly configured mock run with real dictionaries
+        run = Mock()
+        run.id = "retry-test-run"
+        run.start_time = datetime.now()
+        run.end_time = datetime.now()
+
+        # Create proper dictionaries for JSON serialization
+        run_data = {
+            'metrics': {"latency": 1.0},
+            'metadata': {},
+            'inputs': {"test": "input"},
+            'outputs': {"test": "output"},
+            'execution_metadata': {"model": "test"},
+            'error': None,
+            'tags': [],
+            'feedback_stats': {}
+        }
+
+        # Configure mock to return real dictionaries
+        for attr, value in run_data.items():
+            setattr(run, attr, value)
+
         mce = ingestor._convert_run_to_mce(run)
         ingestor.emit_data([mce])
 
-        assert mock_emitter.return_value.emit.call_count == 3
+        # Verify the emit method was called exactly 3 times
+        assert mock_emitter.emit.call_count == 3

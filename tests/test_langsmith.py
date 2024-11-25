@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 from src.platforms.langsmith import LangSmithConnector, LangsmithIngestor
 from src.base import LLMModel, LLMRun
 from src.config import ObservabilityConfig
@@ -8,7 +8,8 @@ from datahub.metadata.schema_classes import MetadataChangeEventClass
 
 @pytest.fixture
 def mock_langsmith_run():
-    run = Mock()
+    # Create a mock with all required attributes as real dictionaries
+    run = MagicMock()
     run.id = "test-run-id"
     run.start_time = datetime.now()
     run.end_time = datetime.now()
@@ -17,66 +18,70 @@ def mock_langsmith_run():
         "context_window": 8192,
         "max_tokens": 1000
     }
-    run.inputs = {"prompt": "test prompt"}
-    run.outputs = {"response": "test response"}
-    run.error = None
-    run.tags = []
-    run.feedback_stats = {}
-    run.latency = 1.0
-    run.cost = 0.01
-    run.token_usage = {"prompt_tokens": 10, "completion_tokens": 20}
+
+    # Configure mock to return dictionaries instead of Mock objects
+    run.configure_mock(**{
+        'metrics': {"latency": 1.0, "cost": 0.01},
+        'metadata': {"source": "test"},
+        'inputs': {"prompt": "test prompt"},
+        'outputs': {"response": "test response"},
+        'error': None,
+        'tags': [],
+        'feedback_stats': {},
+        'token_usage': {"prompt_tokens": 10, "completion_tokens": 20}
+    })
+
+    # Ensure these return the configured values
+    run.metrics = run.metrics
+    run.metadata = run.metadata
+    run.inputs = run.inputs
+    run.outputs = run.outputs
+
     return run
 
 @pytest.fixture
-def mock_config():
-    config = ObservabilityConfig()
-    config.datahub_dry_run = True
-    config.langsmith_api_key = "test-key"
-    return config
+def mock_client(mock_langsmith_run):
+    with patch('langsmith.Client') as MockClient:
+        client = MockClient.return_value
+        # Mock the list_runs method to return our mock run
+        client.list_runs.return_value = [mock_langsmith_run]
+        # Mock project name
+        client.project_name = "test-project"
+        yield client
 
-def test_langsmith_connector(mock_config, mock_langsmith_run):
+def test_langsmith_connector(mock_config, mock_client, mock_langsmith_run):
     with patch('langsmith.Client') as MockClient:
         # Configure mock client
         mock_client = MockClient.return_value
         mock_client.list_runs.return_value = [mock_langsmith_run]
-
-        # Configure mock run attributes
-        mock_langsmith_run.configure_mock(**{
-            'metrics': {},
-            'metadata': {},
-            'inputs': {},
-            'outputs': {},
-            'execution_metadata': {'model_name': 'test-model'},
-            'error': None,
-            'tags': [],
-            'feedback_stats': {}
-        })
+        mock_client.list_runs.side_effect = None  # Override any previous side_effect
 
         connector = LangSmithConnector(mock_config)
-        # Mock the project name to avoid API call
+        connector.client = mock_client
         connector.project_name = "test-project"
 
         runs = connector.get_runs()
         assert len(runs) == 1
         assert runs[0].id == mock_langsmith_run.id
 
-def test_langsmith_ingestor(mock_config, mock_langsmith_run, tmp_path):
+def test_langsmith_ingestor(mock_config, mock_client, mock_langsmith_run, tmp_path):
     with patch('langsmith.Client') as MockClient:
-        # Configure mock client
+        # Configure mock client with proper session handling
         mock_client = MockClient.return_value
-        mock_client.list_runs.return_value = [mock_langsmith_run]
+        mock_session = Mock()
+        mock_session.id = "test-session"
+        mock_session.name = "default"
 
-        # Configure mock run with proper return values
-        mock_langsmith_run.configure_mock(**{
-            'metrics': {},
-            'metadata': {},
-            'inputs': {},
-            'outputs': {},
-            'execution_metadata': {'model_name': 'test-model'},
-            'error': None,
-            'tags': [],
-            'feedback_stats': {}
-        })
+        # Setup proper session/project flow
+        mock_client.list_sessions.return_value = [mock_session]
+        mock_client.read_session.return_value = mock_session
+        mock_client.list_runs.return_value = [mock_langsmith_run]
+        mock_client.list_projects.return_value = [{"name": "test-project"}]
+        mock_client.read_project.return_value = {"name": "test-project"}
+
+        # Ensure no side effects interfere
+        mock_client.list_runs.side_effect = None
+        mock_client.list_sessions.side_effect = None
 
         ingestor = LangsmithIngestor(
             mock_config,
@@ -84,8 +89,7 @@ def test_langsmith_ingestor(mock_config, mock_langsmith_run, tmp_path):
             processing_dir=tmp_path,
             emit_to_datahub=False
         )
-
-        # Mock the project name to avoid API call
+        ingestor.client = mock_client
         ingestor.project_name = "test-project"
 
         raw_data = ingestor.fetch_data()
