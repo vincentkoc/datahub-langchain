@@ -19,7 +19,8 @@ from src.utils.model_utils import (
     get_capabilities_from_model,
     get_provider_from_model,
     get_model_family,
-    get_model_parameters
+    get_model_parameters,
+    normalize_model_name
 )
 from src.emitters.json_emitter import JSONEmitter
 from src.emitters.datahub import DataHubEmitter
@@ -115,12 +116,19 @@ class LangSmithConnector(LLMPlatformConnector):
                     print("⚠️ No runs found")
                     return []
 
-                # Group runs by project + run_type
+                # Group runs by project + run_type, but normalize model names
                 run_groups = {}
                 for run in all_runs:
-                    run_type = getattr(run, 'run_type', 'unknown')
-                    name = getattr(run, 'name', 'unknown')
-                    group_key = f"{self.project_name}_{name}"  # Use name instead of just run_type
+                    # Extract model info from extra field
+                    extra = getattr(run, 'extra', {}) or {}
+                    invocation_params = extra.get('invocation_params', {})
+                    model_name = invocation_params.get('model_name') or invocation_params.get('model', 'unknown')
+
+                    # Normalize model name for consistency
+                    model_name = normalize_model_name(model_name)  # This will convert ChatOpenAI to gpt-3.5-turbo etc.
+
+                    # Use normalized name for grouping
+                    group_key = f"{self.project_name}_{model_name}"
 
                     if group_key not in run_groups:
                         run_groups[group_key] = []
@@ -139,8 +147,10 @@ class LangSmithConnector(LLMPlatformConnector):
                         if extra and isinstance(extra, dict):
                             invocation_params = extra.get('invocation_params', {})
                             if invocation_params:
+                                model_name = invocation_params.get('model_name') or invocation_params.get('model', 'unknown')
+                                model_name = normalize_model_name(model_name)  # Normalize here too
                                 model_info = {
-                                    'model_name': invocation_params.get('model_name', 'unknown'),
+                                    'model_name': model_name,  # Use normalized name
                                     'temperature': invocation_params.get('temperature', 0.7),
                                     'max_tokens': invocation_params.get('max_tokens'),
                                     **extra.get('metadata', {})
@@ -150,10 +160,10 @@ class LangSmithConnector(LLMPlatformConnector):
                         model = None
                         if model_info:
                             model = LLMModel(
-                                name=model_info.get('model_name', 'unknown'),
-                                provider=get_provider_from_model(model_info.get('model_name', '')),
-                                model_family=get_model_family(model_info.get('model_name', '')),
-                                capabilities=get_capabilities_from_model(model_info.get('model_name', '')),
+                                name=model_info['model_name'],  # Use normalized name
+                                provider=get_provider_from_model(model_info['model_name']),
+                                model_family=get_model_family(model_info['model_name']),
+                                capabilities=get_capabilities_from_model(model_info['model_name']),
                                 parameters=model_info,
                                 metadata={
                                     "source": "langsmith",
@@ -182,7 +192,7 @@ class LangSmithConnector(LLMPlatformConnector):
                             "total_runs": len(group_runs)
                         }
 
-                        # Create LLMRun for the group
+                        # Create LLMRun with normalized names
                         llm_run = LLMRun(
                             id=str(getattr(latest_run, 'id', str(uuid.uuid4()))),
                             start_time=getattr(latest_run, 'start_time', datetime.now()),
@@ -195,7 +205,7 @@ class LangSmithConnector(LLMPlatformConnector):
                             metadata={
                                 "source": "langsmith",
                                 "project": self.project_name,
-                                "name": getattr(latest_run, 'name', 'unknown'),
+                                "name": model_info['model_name'] if model_info else 'unknown',  # Use normalized name
                                 "run_type": getattr(latest_run, 'run_type', 'unknown'),
                                 "group_key": group_key,
                                 "error": str(getattr(latest_run, 'error', '')) or '',
