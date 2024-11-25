@@ -28,7 +28,10 @@ from datahub.metadata.schema_classes import (
     GlobalTagsClass,
     TagAssociationClass,
     MLModelKeyClass,
-    MLHyperParamClass
+    MLHyperParamClass,
+    UpstreamLineageClass,
+    UpstreamClass,
+    MetadataChangeEventClass
 )
 
 class LangChainConnector(LLMPlatformConnector):
@@ -278,16 +281,20 @@ class LangChainConnector(LLMPlatformConnector):
         }
 
 class LangChainObserver(BaseCallbackHandler, LLMObserver):
-    """Observer for LangChain operations"""
+    """LangChain observer that emits metadata to DataHub"""
 
     def __init__(self, config: ObservabilityConfig, emitter: LLMMetadataEmitter,
-                 pipeline_name: Optional[str] = None, group_models: bool = False):
-        """Initialize observer with config and emitter"""
+                 pipeline_name: Optional[str] = None, group_models: bool = True,
+                 hard_fail: bool = False):
+        # Call both parent class initializers
+        BaseCallbackHandler.__init__(self)
+        LLMObserver.__init__(self)
+
         self.config = config
         self.emitter = emitter
         self.active_runs: Dict[str, Dict] = {}
         self.connector = LangChainConnector(group_models=group_models)
-        self.registered_models = set()
+        self.hard_fail = hard_fail
 
         # Use provided pipeline name or get from source file
         self.pipeline_name = pipeline_name if pipeline_name else detect_pipeline_name()
@@ -322,6 +329,9 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
         if run_id in self.active_runs:
             run_data = self.active_runs[run_id]
 
+            if self.config.langchain_verbose:
+                print(f"\nProcessing LLM run end: {run_id}")
+
             metrics = Metrics(
                 latency=(datetime.now() - run_data["start_time"]).total_seconds(),
                 token_usage=response.llm_output.get("token_usage", {}) if response.llm_output else {},
@@ -352,8 +362,19 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
                 print(f"Latency: {metrics.latency:.2f}s")
                 if metrics.token_usage:
                     print(f"Tokens: {metrics.token_usage}")
+                print(f"\nEmitting run to DataHub...")
 
-            self.emitter.emit_run(run)
+            # First emit the model
+            if run.model:
+                model_urn = self.emitter.emit_model(run.model)
+                if self.config.langchain_verbose:
+                    print(f"Emitted model: {model_urn}")
+
+            # Then emit the run with lineage
+            pipeline_urn = self.emit_run(run)
+            if self.config.langchain_verbose:
+                print(f"Emitted pipeline: {pipeline_urn}")
+
             self.end_run(run_id)
             del self.active_runs[run_id]
 
@@ -408,3 +429,68 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
         )
 
         return group, run_model
+
+    def emit_run(self, run: LLMRun) -> str:
+        """Emit run metadata as part of a pipeline and create lineage"""
+        try:
+            # First emit model and get URN
+            model_urn = None
+            if run.model:
+                model_urn = self.emitter.emit_model(run.model)
+                if self.config.langchain_verbose:
+                    print(f"Emitted model with URN: {model_urn}")
+
+            # Create pipeline metadata
+            pipeline_name = run.metadata.get("pipeline_name") or detect_pipeline_name()
+            pipeline_urn = f"urn:li:mlModel:(urn:li:dataPlatform:langchain,{pipeline_name},PROD)"
+
+            # Create properties with lineage through trainingJobs
+            properties = MLModelPropertiesClass(
+                description=f"LangChain Pipeline: {pipeline_name}",
+                type="Pipeline",
+                customProperties={
+                    "pipeline_name": pipeline_name,
+                    "framework": "langchain",
+                    "last_run_id": str(run.id),
+                    "last_run_time": str(run.start_time.isoformat()),
+                    "last_run_status": "completed" if not run.metrics.get("error") else "failed",
+                    "latency": str(run.metrics.get("latency", 0)),
+                    "total_tokens": str(run.metrics.get("token_usage", {}).get("total_tokens", 0)),
+                    "cost": str(run.metrics.get("cost", 0)),
+                    "error_rate": str(run.metrics.get("error_rate", 0)),
+                    "success_rate": str(run.metrics.get("success_rate", 1.0))
+                },
+                trainingJobs=[model_urn] if model_urn else None  # Add lineage through trainingJobs
+            )
+
+            # Add tags
+            tags = GlobalTagsClass(
+                tags=[
+                    TagAssociationClass(tag=f"urn:li:tag:pipeline"),
+                    TagAssociationClass(tag=f"urn:li:tag:langchain"),
+                    TagAssociationClass(tag=f"urn:li:tag:{'success' if not run.metrics.get('error') else 'failed'}")
+                ]
+            )
+
+            # Create and emit pipeline MCE with lineage
+            pipeline_mce = MetadataChangeEventClass(
+                proposedSnapshot=MLModelSnapshotClass(
+                    urn=pipeline_urn,
+                    aspects=[properties, tags]
+                )
+            )
+
+            if self.config.langchain_verbose:
+                print(f"Emitting pipeline MCE with {len([properties, tags])} aspects")
+
+            # Emit pipeline with lineage
+            self.emitter._emit_with_retry(pipeline_mce)
+
+            return pipeline_urn
+
+        except Exception as e:
+            if self.config.langchain_verbose:
+                print(f"\n✗ Failed to emit pipeline run {run.id}: {e}")
+            if self.hard_fail:
+                raise
+            return ""
