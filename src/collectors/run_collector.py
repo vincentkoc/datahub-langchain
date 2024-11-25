@@ -24,34 +24,34 @@ class RunCollector:
                 print(f"Error collecting runs from {connector.__class__.__name__}: {e}")
         return runs
 
-    def get_run_stats(self, window: timedelta = timedelta(days=1)) -> Dict[str, Any]:
+    def get_run_stats(self, time_window: timedelta) -> Dict[str, Any]:
         """Get statistics about collected runs"""
         end_time = datetime.now()
-        start_time = end_time - window
+        start_time = end_time - time_window
         runs = self.collect_runs(start_time=start_time, end_time=end_time)
 
         return {
             "total_runs": len(runs),
-            "success_rate": self._calculate_success_rate(runs),
-            "average_latency": self._calculate_average_latency(runs),
-            "total_cost": self._calculate_total_cost(runs),
-            "error_distribution": self._get_error_distribution(runs)
+            "success_rate": self._compute_success_rate(runs),
+            "average_latency": self._compute_average_latency(runs),
+            "total_cost": self._compute_total_cost(runs),
+            "error_distribution": self._compute_error_distribution(runs)
         }
 
-    def _calculate_success_rate(self, runs: List[LLMRun]) -> float:
+    def _compute_success_rate(self, runs: List[LLMRun]) -> float:
         if not runs:
             return 0.0
         successful = sum(1 for run in runs if run.metrics.get("status") == "success")
         return successful / len(runs)
 
-    def _calculate_average_latency(self, runs: List[LLMRun]) -> float:
+    def _compute_average_latency(self, runs: List[LLMRun]) -> float:
         latencies = [run.metrics.get("latency", 0) for run in runs if run.metrics.get("latency")]
         return sum(latencies) / len(latencies) if latencies else 0
 
-    def _calculate_total_cost(self, runs: List[LLMRun]) -> float:
+    def _compute_total_cost(self, runs: List[LLMRun]) -> float:
         return sum(run.metrics.get("cost", 0) for run in runs)
 
-    def _get_error_distribution(self, runs: List[LLMRun]) -> Dict[str, int]:
+    def _compute_error_distribution(self, runs: List[LLMRun]) -> Dict[str, int]:
         errors = {}
         for run in runs:
             if error := run.metrics.get("error"):
