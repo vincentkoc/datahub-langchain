@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import uuid
+import requests
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import LLMResult, AgentAction
@@ -18,6 +19,7 @@ from ..base import (
 from ..models import Prompt, Metrics, Tool
 from ..config import ObservabilityConfig
 from ..utils.model_utils import get_capabilities_from_model, get_provider_from_model, get_model_family, get_model_parameters, normalize_model_name
+from ..utils.pipeline_utils import detect_pipeline_name
 
 # Add DataHub specific imports
 from datahub.metadata.schema_classes import (
@@ -158,8 +160,8 @@ class LangChainConnector(LLMPlatformConnector):
         provider = get_provider_from_model(normalized_name)
         family = get_model_family(normalized_name)
 
-        # Use specific version name instead of generic family
-        display_name = f"{provider} {normalized_name}"  # e.g. "OpenAI gpt-3.5-turbo-0125"
+        # Create a clean display name
+        display_name = f"{family}"  # e.g. "GPT-3.5 Turbo"
 
         return LLMModel(
             name=display_name,
@@ -171,7 +173,7 @@ class LangChainConnector(LLMPlatformConnector):
                 "source": "langchain",
                 "platform": "langchain",
                 "type": "chat" if "chat" in get_capabilities_from_model(normalized_name) else "completion",
-                "description": f"{provider} {normalized_name} Language Model",
+                "description": f"{provider} {display_name} Language Model",
                 "raw_name": normalized_name
             }
         )
@@ -239,32 +241,6 @@ class LangChainConnector(LLMPlatformConnector):
             "has_memory": hasattr(chain, 'memory')
         }
 
-    def register_platform(self):
-        """Register LangChain as a DataHub platform using available classes"""
-        # Create platform metadata using MLModelProperties instead
-        platform_props = MLModelPropertiesClass(
-            description="LangChain Framework for LLM Applications",
-            type="FRAMEWORK",
-            customProperties={
-                "name": "LangChain",
-                "displayName": "LangChain",
-                "type": "llm_framework",
-                "domain": "ai_ml",
-                "category": "development_framework",
-                "logoUrl": "https://assets.streamlinehq.com/image/private/w_300,h_300,ar_1/f_auto/v1/icons/logos/langchain-ipuhh4qo1jz5ssl4x0g2a.png/langchain-dp1uxj2zn3752pntqnpfu2.png?_a=DAJFJtWIZAAC"
-            }
-        )
-
-        # Create platform snapshot
-        mce = MetadataChangeEventClass(
-            proposedSnapshot=MLModelSnapshotClass(
-                urn="urn:li:mlModel:(urn:li:dataPlatform:langchain,platform,PROD)",
-                aspects=[platform_props]
-            )
-        )
-
-        self.emitter.emit(mce)
-
 class LangChainObserver(BaseCallbackHandler, LLMObserver):
     """Observer for LangChain operations"""
 
@@ -279,25 +255,6 @@ class LangChainObserver(BaseCallbackHandler, LLMObserver):
 
         # Get pipeline name from source file or override
         self.pipeline_name = pipeline_name or self._detect_pipeline_name()
-
-    def _detect_pipeline_name(self) -> str:
-        """Detect pipeline name from calling file"""
-        import inspect
-        import os
-
-        # Get the calling frame (skip current frame and LangChain internals)
-        frame = inspect.currentframe()
-        while frame:
-            filename = frame.f_code.co_filename
-            if not any(x in filename for x in ['langchain', 'datahub_langchain']):
-                break
-            frame = frame.f_back
-
-        if frame:
-            # Get filename without extension and path
-            pipeline = os.path.splitext(os.path.basename(filename))[0]
-            return pipeline
-        return "default_pipeline"
 
     def on_llm_start(self, serialized: Dict, prompts: List[str], **kwargs) -> None:
         run_id = kwargs.get("run_id", str(uuid.uuid4()))
