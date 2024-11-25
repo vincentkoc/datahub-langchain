@@ -14,7 +14,17 @@ from ..base import (
 )
 from ..models import Metrics
 from ..config import ObservabilityConfig
-from src.utils.model_utils import get_capabilities_from_model
+from src.utils.model_utils import get_capabilities_from_model, get_provider_from_model
+from src.emitters.json_emitter import JSONEmitter
+from src.emitters.datahub import DataHubEmitter
+from datahub.metadata.schema_classes import (
+    MetadataChangeEventClass,
+    DatasetSnapshotClass,
+    DatasetPropertiesClass,
+    MLModelSnapshotClass,
+    MLModelPropertiesClass,
+    # Include custom aspect classes here if available
+)
 
 class LangSmithConnector(LLMPlatformConnector):
     """Connector for LangSmith platform"""
@@ -101,7 +111,7 @@ class LangSmithConnector(LLMPlatformConnector):
 
         return LLMModel(
             name=model_name,
-            provider=self._get_provider_from_model(model_name),
+            provider=get_provider_from_model(model_name),
             model_family=self._get_family_from_model(model_name),
             capabilities=get_capabilities_from_model(model_name),
             parameters={
@@ -171,15 +181,6 @@ class LangSmithConnector(LLMPlatformConnector):
         return components
 
     @staticmethod
-    def _get_provider_from_model(model_name: str) -> str:
-        """Determine provider from model name"""
-        if any(x in model_name.lower() for x in ['gpt', 'davinci', 'curie']):
-            return 'OpenAI'
-        elif 'claude' in model_name.lower():
-            return 'Anthropic'
-        return 'unknown'
-
-    @staticmethod
     def _get_family_from_model(model_name: str) -> str:
         """Determine model family from name"""
         if 'gpt-4' in model_name:
@@ -191,18 +192,27 @@ class LangSmithConnector(LLMPlatformConnector):
         return 'unknown'
 
 class LangsmithIngestor(BaseIngestor):
-    def __init__(self, config, save_debug_data=True, processing_dir=None):
+    def __init__(self, config, save_debug_data=True, processing_dir=None,
+                 emit_to_datahub=True, datahub_emitter=None):
         self.connector = LangSmithConnector(config)
         self.save_debug_data = save_debug_data
-        self.processing_dir = processing_dir
+        self.processing_dir = Path(processing_dir) if processing_dir else None
+        self.emit_to_datahub = emit_to_datahub
+        self.datahub_emitter = datahub_emitter
+
+        # Initialize JSONEmitter if needed
+        if self.save_debug_data and self.processing_dir:
+            self.json_emitter = JSONEmitter(self.processing_dir)
+        else:
+            self.json_emitter = None
 
     def fetch_data(self):
         raw_data = self.connector.get_runs()
         if self.save_debug_data and self.processing_dir:
             raw_data_path = self.processing_dir / 'langsmith_api_output.json'
             with open(raw_data_path, 'w') as f:
-                # Assuming that LLMRun has a method to_dict() or similar
-                json.dump([run.__dict__ for run in raw_data], f, indent=2)
+                # Ensure that LLMRun objects are serializable
+                json.dump([run.to_dict() for run in raw_data], f, indent=2)
         return raw_data
 
     def process_data(self, raw_data):
@@ -213,21 +223,92 @@ class LangsmithIngestor(BaseIngestor):
         if self.save_debug_data and self.processing_dir:
             processed_data_path = self.processing_dir / 'mce_output.json'
             with open(processed_data_path, 'w') as f:
-                json.dump(processed_data, f, indent=2)
+                # Convert MCEs to serializable dictionaries
+                json.dump([mce.to_obj() for mce in processed_data], f, indent=2)
         return processed_data
 
     def emit_data(self, processed_data):
-        # Emit processed data, e.g., save to file or send to DataHub
-        for mce in processed_data:
-            # Implement emission logic
-            pass  # Replace with actual emission code
+        # Emit processed data to DataHub if enabled
+        if self.emit_to_datahub and self.datahub_emitter:
+            for mce in processed_data:
+                try:
+                    self.datahub_emitter.emit(mce)
+                    print(f"Emitted MCE to DataHub: {mce.proposedSnapshot.urn}")
+                except Exception as e:
+                    print(f"Error emitting to DataHub: {e}")
+        else:
+            print("DataHub emission for runs is disabled or emitter not available.")
+
+        # Emit processed data to JSON if enabled
+        if self.json_emitter:
+            # Convert MCEs to serializable dictionaries
+            self.json_emitter.emit([mce.to_obj() for mce in processed_data], 'processed_data.json')
 
     def _convert_run_to_mce(self, run):
-        # Implement the conversion logic from LLMRun to MCE
-        mce = {
-            "id": run.id,
-            "metrics": run.metrics,
-            "metadata": run.metadata,
-            # Add additional fields as needed
+        # Create URN for the run
+        run_urn = f"urn:li:dataset:(urn:li:dataPlatform:langsmith,runs/{run.id},PROD)"
+
+        # Construct custom properties
+        custom_properties = {
+            "run_id": run.id,
+            "start_time": run.start_time.isoformat(),
+            "end_time": run.end_time.isoformat() if run.end_time else None,
+            "inputs": json.dumps(run.inputs),
+            "outputs": json.dumps(run.outputs),
+            "metrics": json.dumps(run.metrics),
+            "metadata": json.dumps(run.metadata),
         }
+
+        # Create MCE
+        mce = MetadataChangeEventClass(
+            proposedSnapshot=DatasetSnapshotClass(
+                urn=run_urn,
+                aspects=[
+                    DatasetPropertiesClass(
+                        name=f"LLM Run {run.id}",
+                        description=f"Run ID: {run.id}",
+                        customProperties=custom_properties
+                    )
+                ]
+            )
+        )
         return mce
+
+    def process_models(self, models):
+        # Process models if any additional processing is needed
+        pass
+
+    def emit_models(self, models):
+        # Emit models to DataHub if enabled
+        if self.emit_to_datahub and self.datahub_emitter:
+            for model in models:
+                try:
+                    model_urn = f"urn:li:mlModel:(urn:li:dataPlatform:{model.provider},{model.name},PROD)"
+                    mce = MetadataChangeEventClass(
+                        proposedSnapshot=MLModelSnapshotClass(
+                            urn=model_urn,
+                            aspects=[
+                                MLModelPropertiesClass(
+                                    name=model.name,
+                                    description=f"{model.provider} {model.name}",
+                                    customProperties={
+                                        "provider": model.provider,
+                                        "model_family": model.model_family,
+                                        "capabilities": json.dumps(model.capabilities),
+                                        "parameters": json.dumps(model.parameters),
+                                        "metadata": json.dumps(model.metadata)
+                                    }
+                                )
+                            ]
+                        )
+                    )
+                    self.datahub_emitter.emit(mce)
+                    print(f"Emitted model to DataHub: {model.name}")
+                except Exception as e:
+                    print(f"Error emitting model to DataHub: {e}")
+        else:
+            print("DataHub emission for models is disabled or emitter not available.")
+
+        # Save models to JSON if enabled
+        if self.json_emitter:
+            self.json_emitter.emit([model.to_dict() for model in models], 'models.json')
