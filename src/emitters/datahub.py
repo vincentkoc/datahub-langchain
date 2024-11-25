@@ -109,8 +109,11 @@ class CustomDatahubRestEmitter(DatahubRestEmitter):
                                 "urn": snapshot[snapshot_type]["urn"],
                                 "aspects": [
                                     {
-                                        "com.linkedin.common.DatasetProperties" if "Dataset" in snapshot_type
-                                        else "com.linkedin.common.MLModelProperties": aspect
+                                        "com.linkedin.dataset.DatasetProperties": {
+                                            "customProperties": aspect["customProperties"],
+                                            "description": aspect["description"],
+                                            "tags": aspect.get("tags", [])
+                                        }
                                     }
                                     for aspect_obj in snapshot[snapshot_type]["aspects"]
                                     for aspect_type, aspect in aspect_obj.items()
