@@ -1,169 +1,181 @@
-# LangChain DataHub Integration
+# LangChain DataHub Integration 🔗
 
-This project demonstrates how to integrate LangChain/LangSmith workflows into DataHub's metadata platform, providing visibility into your LLM operations.
+<p align="center">
+  <strong>Seamless LLM Lineage for DataHub</strong>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#contributing">Contributing</a> •
+  <a href="#license">License</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.8+-blue.svg" alt="Python">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/LangChain-Integrated-orange.svg" alt="LangChain">
+  <img src="https://img.shields.io/badge/DataHub-Compatible-purple.svg" alt="DataHub">
+  <br/>
+  <img src="https://img.shields.io/github/stars/vincentkoc/natilius" alt="Stars">
+  <img src="https://img.shields.io/github/forks/vincentkoc/natilius" alt="Forks">
+  <img src="https://img.shields.io/github/issues/vincentkoc/natilius" alt="Issues">
+</p>
+
+A comprehensive observability solution that integrates LangChain and LangSmith workflows into DataHub's metadata platform, providing deep visibility into your LLM operations.
 
 ## Features
 
-- Custom metadata types for LLM components:
-  - Models (GPT-4, Claude, etc.)
-  - Prompts (templates, few-shot examples)
-  - Chains (LangChain sequences)
-  - Runs (execution history from LangSmith)
-- Dry run mode for testing without DataHub
-- Automatic metadata ingestion from LangSmith
-- Support for both local and remote DataHub instances
+- 🔄 **Real-Time Observation**: Live monitoring of LangChain operations
+- 📊 **Rich Metadata**: Detailed tracking of models, prompts, and chains
+- 🔍 **Deep Insights**: Comprehensive metrics and lineage tracking
+- 🚀 **Multiple Platforms**: Support for LangChain, LangSmith, and more
+- 🛠 **Extensible**: Easy to add new platforms and emitters
+- 🧪 **Debug Mode**: Built-in debugging and dry run capabilities
 
-## Prerequisites
-
-- Python 3.8+
-- LangSmith API access
-- DataHub instance (local or remote)
-- OpenAI API key (for examples)
-
-## Quick Start
-
-1. **Set up environment**
+## Installation
 
 ```bash
-# Clone and setup
+# Clone the repository
 git clone <repository-url>
 cd langchain-datahub-integration
+
+# Create and activate virtual environment
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
 pip install -r requirements.txt
 
-# Copy and edit environment variables
+# Copy and configure environment
 cp .env.example .env
 ```
 
-2. **Configure environment**
+## Quick Start
 
-Required variables in `.env`:
+1. **Configure Environment**
+
 ```bash
-# LangSmith configuration
+# Required environment variables
 LANGSMITH_API_KEY=ls-...
 LANGCHAIN_TRACING_V2=true
-LANGCHAIN_PROJECT="default"
+LANGCHAIN_PROJECT=default
 
-# OpenAI (for examples)
 OPENAI_API_KEY=sk-...
 
-# DataHub configuration
 DATAHUB_GMS_URL=http://localhost:8080
 DATAHUB_TOKEN=your_token_here
-DATAHUB_DRY_RUN=false  # Set to true for testing
 ```
 
-3. **Start DataHub (if running locally)**
+2. **Run Basic Example**
 
-```bash
-# Start DataHub using provided compose file
-make docker-up
+```python
+from langchain_openai import ChatOpenAI
+from src.platforms.langchain import LangChainObserver
+from src.emitters.datahub import DataHubEmitter
+from src.config import ObservabilityConfig
 
-# Wait for DataHub to be ready (~2-3 minutes)
-# Then create a token and add it to .env
-make setup-token
-```
+# Setup observation
+config = ObservabilityConfig(langchain_verbose=True)
+emitter = DataHubEmitter(gms_server="http://localhost:8080")
+observer = LangChainObserver(config=config, emitter=emitter)
 
-4. **Run the integration**
+# Initialize LLM with observer
+llm = ChatOpenAI(callbacks=[observer])
 
-```bash
-# Test with dry run first
-make dry-run
-
-# Run the full integration
-make run
+# Run with automatic observation
+response = llm.invoke("Tell me a joke")
 ```
 
 ## Architecture
 
 The integration consists of three main components:
 
-1. **Metadata Setup** (`src/metadata_setup.py`)
-   - Registers custom types with DataHub
-   - Handles connection and authentication
-   - Provides dry run capability
+1. **Observers** (`src/platforms/`)
+   - Real-time monitoring of LLM operations
+   - Metric collection and event tracking
+   - Platform-specific adapters
 
-2. **LangSmith Integration** (`src/langsmith_ingestion.py`)
-   - Fetches run history from LangSmith
-   - Transforms runs into DataHub metadata
-   - Handles batching and rate limiting
+2. **Emitters** (`src/emitters/`)
+   - DataHub metadata emission
+   - Console debugging output
+   - JSON file export
 
-3. **LangChain Example** (`src/langchain_example.py`)
-   - Shows live integration with LangChain
-   - Demonstrates metadata emission
-   - Includes error handling
+3. **Collectors** (`src/collectors/`)
+   - Historical data collection
+   - Batch processing
+   - Aggregated metrics
 
-## Custom Types
+## Usage Examples
 
-The integration defines several custom metadata types:
+### Basic LangChain Integration
 
-1. **LLM Model** (`metadata/types/llm_model.json`)
-   - Model details (name, provider)
-   - Capabilities and limitations
-   - Performance metrics
+```python
+# examples/langchain_basic.py
+from langchain_openai import ChatOpenAI
+from src.platforms.langchain import LangChainObserver
 
-2. **LLM Prompt** (`metadata/types/llm_prompt.json`)
-   - Template structure
-   - Input variables
-   - Usage statistics
-
-3. **LLM Chain** (`metadata/types/llm_chain.json`)
-   - Component relationships
-   - Configuration
-   - Performance metrics
-
-4. **LLM Run** (`metadata/types/llm_run.json`)
-   - Execution details
-   - Inputs/outputs
-   - Error information
-
-## Development
-
-```bash
-# Install dev dependencies
-pip install -r requirements-dev.txt
-
-# Run tests
-make test
-
-# Format code
-make format
-
-# Run linters
-make lint
+observer = LangChainObserver(config=config, emitter=emitter)
+llm = ChatOpenAI(callbacks=[observer])
 ```
 
-## Troubleshooting
+### RAG Pipeline Integration
 
-1. **DataHub Connection Issues**
-   ```bash
-   # Test DataHub connection
-   make check-connection
-   ```
+```python
+# examples/langchain_rag.py
+from langchain.chains import RetrievalQA
+from src.utils.metrics import MetricsAggregator
 
-2. **Dry Run Mode**
-   ```bash
-   # Set in .env
-   DATAHUB_DRY_RUN=true
+chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=vectorstore.as_retriever(),
+    callbacks=[observer]
+)
+```
 
-   # Or use make target
-   make dry-run
-   ```
+### Historical Data Ingestion
 
-3. **Common Issues**
-   - Ensure DataHub is running (`docker ps`)
-   - Check token is set in `.env`
-   - Verify GMS URL is correct
-   - Look for rate limiting in logs
+```python
+# examples/langsmith_ingest.py
+from src.cli.ingest import ingest_logic
+
+ingest_logic(
+    days=7,
+    platform='langsmith',
+    debug=True,
+    save_debug_data=True
+)
+```
+
+## Customization
+
+The integration is highly customizable through:
+
+- **Configuration** (`src/config.py`): Environment and platform settings
+- **Custom Emitters**: Implement `LLMMetadataEmitter` for new destinations
+- **Platform Extensions**: Add new platforms by implementing `LLMPlatformConnector`
+- **Metrics Collection**: Extend `MetricsAggregator` for custom metrics
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Run tests (`make test`)
+3. Run tests and linting:
+   ```bash
+   make test
+   make lint
+   ```
 4. Submit a pull request
 
 ## License
 
-GPL-3.0
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+---
+
+<p align="center">
+  Made with ❤️ by <a href="https://github.com/vincentkoc">Vincent Koc</a>
+</p>
